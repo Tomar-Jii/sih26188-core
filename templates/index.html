@@ -6,7 +6,8 @@
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-[#0b0f17] text-slate-200 min-h-screen font-mono antialiased">
-  <header class="border-b border-slate-800 bg-slate-900/60 backdrop-blur px-8 py-4 flex justify-between items-center">
+  
+  <header class="border-b border-slate-800 bg-slate-900/60 backdrop-blur px-6 py-4 flex justify-between items-center">
     <div>
       <div class="flex items-center space-x-3">
         <span class="w-3 h-3 bg-red-500 rounded-full animate-pulse"></span>
@@ -14,60 +15,86 @@
       </div>
       <p class="text-xs text-slate-500">MHA SIH26188 // Zero-Trust Identity & Tamper Verification</p>
     </div>
-    <div class="text-right">
-      <span class="text-xs border border-emerald-500/40 bg-emerald-950/40 text-emerald-400 px-3 py-1 rounded">ENGINE: ACTIVE</span>
-    </div>
+    <span class="text-xs border border-emerald-500/40 bg-emerald-950/40 text-emerald-400 px-3 py-1 rounded">ENGINE: ACTIVE</span>
   </header>
 
-  <div class="max-w-7xl mx-auto p-6 space-y-6">
-    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-      <div class="bg-slate-900/80 border border-slate-800 p-4 rounded-lg">
-        <span class="text-xs text-slate-500 block">SHA-256 HASH</span>
-        <span id="card-sha" class="text-[10px] text-slate-300 break-all">Awaiting File...</span>
+  <div class="max-w-7xl mx-auto p-4 md:p-6 space-y-6">
+    
+    <!-- Status Ribbon -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div class="bg-slate-900/80 border border-slate-800 p-3 rounded-lg">
+        <span class="text-[10px] text-slate-500 block">SHA-256 HASH</span>
+        <span id="card-sha" class="text-[9px] text-slate-300 break-all">Awaiting File...</span>
       </div>
-      <div class="bg-slate-900/80 border border-slate-800 p-4 rounded-lg">
-        <span class="text-xs text-slate-500 block">SCREEN SPOOF (MOIRÉ)</span>
-        <span id="card-moire" class="text-lg font-bold text-slate-300">--</span>
+      <div class="bg-slate-900/80 border border-slate-800 p-3 rounded-lg">
+        <span class="text-[10px] text-slate-500 block">SCREEN SPOOF (MOIRÉ)</span>
+        <span id="card-moire" class="text-sm md:text-base font-bold text-slate-300">--</span>
       </div>
-      <div class="bg-slate-900/80 border border-slate-800 p-4 rounded-lg">
-        <span class="text-xs text-slate-500 block">TAMPERED ZONES</span>
-        <span id="card-boxes" class="text-lg font-bold text-slate-300">--</span>
+      <div class="bg-slate-900/80 border border-slate-800 p-3 rounded-lg">
+        <span class="text-[10px] text-slate-500 block">TAMPERED ZONES</span>
+        <span id="card-boxes" class="text-sm md:text-base font-bold text-slate-300">--</span>
       </div>
-      <div class="bg-slate-900/80 border border-slate-800 p-4 rounded-lg">
-        <span class="text-xs text-slate-500 block">SYSTEM VERDICT</span>
-        <span id="card-verdict" class="text-lg font-black tracking-wider text-slate-500">STANDBY</span>
+      <div class="bg-slate-900/80 border border-slate-800 p-3 rounded-lg">
+        <span class="text-[10px] text-slate-500 block">SYSTEM VERDICT</span>
+        <span id="card-verdict" class="text-sm md:text-base font-black tracking-wider text-slate-500">STANDBY</span>
       </div>
     </div>
 
+    <!-- Central Control -->
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      
+      <!-- Ingestion Column -->
       <div class="bg-slate-900/40 border border-slate-800 p-5 rounded-lg space-y-4">
-        <h2 class="text-xs uppercase font-bold text-slate-400 tracking-wider">Target Ingestion</h2>
-        <div id="drop-area" class="border border-dashed border-slate-700 hover:border-cyan-500/70 p-6 rounded-lg text-center cursor-pointer transition bg-slate-950/40">
-          <input type="file" id="doc-upload" class="hidden" accept="image/*" />
-          <span class="text-xs text-slate-300 block">Click to select ID Card image</span>
+        
+        <!-- Mode Switcher -->
+        <div class="flex border border-slate-800 rounded p-1 bg-slate-950">
+          <button id="tab-upload" class="flex-1 py-1.5 text-xs font-bold rounded bg-cyan-600 text-black">Upload File</button>
+          <button id="tab-camera" class="flex-1 py-1.5 text-xs font-bold rounded text-slate-400 hover:text-white">Live Camera</button>
         </div>
-        <button id="run-audit-btn" class="w-full bg-cyan-600 hover:bg-cyan-500 text-black font-bold py-2.5 rounded text-xs tracking-wider uppercase transition disabled:opacity-30" disabled>
-          Execute Forensic Inspection
-        </button>
+
+        <!-- File Ingestion Section -->
+        <div id="section-upload" class="space-y-4">
+          <div id="drop-area" class="border border-dashed border-slate-700 hover:border-cyan-500/70 p-6 rounded-lg text-center cursor-pointer transition bg-slate-950/40">
+            <input type="file" id="doc-upload" class="hidden" accept="image/*" />
+            <span class="text-xs text-slate-300 block">Tap to select from Gallery / Files</span>
+          </div>
+          <button id="run-audit-btn" class="w-full bg-cyan-600 hover:bg-cyan-500 text-black font-bold py-2.5 rounded text-xs tracking-wider uppercase transition disabled:opacity-30" disabled>
+            Execute Forensic Inspection
+          </button>
+        </div>
+
+        <!-- Live Camera Section -->
+        <div id="section-camera" class="space-y-3 hidden">
+          <div class="relative bg-black rounded-lg overflow-hidden border border-slate-800 aspect-[4/3] flex items-center justify-center">
+            <video id="webcam" autoplay playsinline class="w-full h-full object-cover"></video>
+            <canvas id="snapshot-canvas" class="hidden"></canvas>
+          </div>
+          <button id="capture-btn" class="w-full bg-emerald-500 hover:bg-emerald-400 text-black font-bold py-2.5 rounded text-xs tracking-wider uppercase transition">
+            Snap & Run Forensic Audit
+          </button>
+        </div>
+
+        <!-- Diagnostics Log -->
         <div class="border-t border-slate-800 pt-4 space-y-2">
-          <h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider">Diagnostics</h3>
+          <h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider">Diagnostics Console</h3>
           <ul id="flags-console" class="space-y-1.5 text-[11px] text-slate-400">
             <li class="text-slate-600">No document scanned yet.</li>
           </ul>
         </div>
       </div>
 
+      <!-- Result Viewers -->
       <div class="lg:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4">
         <div class="bg-slate-900/40 border border-slate-800 p-4 rounded-lg flex flex-col">
           <span class="text-xs text-slate-400 font-bold mb-2">ANOMALY LOCALIZATION (CONTOUR BOXES)</span>
-          <div class="flex-1 bg-black rounded flex items-center justify-center min-h-[280px] overflow-hidden border border-slate-800/80">
+          <div class="flex-1 bg-black rounded flex items-center justify-center min-h-[260px] overflow-hidden border border-slate-800/80">
             <img id="img-annotated" class="max-h-72 object-contain hidden" />
             <span id="p-annotated" class="text-xs text-slate-600">Awaiting processing</span>
           </div>
         </div>
         <div class="bg-slate-900/40 border border-slate-800 p-4 rounded-lg flex flex-col">
           <span class="text-xs text-slate-400 font-bold mb-2">ERROR LEVEL ANALYSIS (HEATMAP)</span>
-          <div class="flex-1 bg-black rounded flex items-center justify-center min-h-[280px] overflow-hidden border border-slate-800/80">
+          <div class="flex-1 bg-black rounded flex items-center justify-center min-h-[260px] overflow-hidden border border-slate-800/80">
             <img id="img-ela" class="max-h-72 object-contain hidden" />
             <span id="p-ela" class="text-xs text-slate-600">Awaiting processing</span>
           </div>
@@ -77,11 +104,44 @@
   </div>
 
   <script>
+    const tabUpload = document.getElementById('tab-upload');
+    const tabCamera = document.getElementById('tab-camera');
+    const sectionUpload = document.getElementById('section-upload');
+    const sectionCamera = document.getElementById('section-camera');
+    const webcam = document.getElementById('webcam');
+    const captureBtn = document.getElementById('capture-btn');
+    const snapshotCanvas = document.getElementById('snapshot-canvas');
     const uploader = document.getElementById('doc-upload');
     const dropArea = document.getElementById('drop-area');
     const runBtn = document.getElementById('run-audit-btn');
     let targetFile = null;
+    let stream = null;
 
+    // Tabs
+    tabUpload.onclick = () => {
+      tabUpload.className = "flex-1 py-1.5 text-xs font-bold rounded bg-cyan-600 text-black";
+      tabCamera.className = "flex-1 py-1.5 text-xs font-bold rounded text-slate-400 hover:text-white";
+      sectionUpload.classList.remove('hidden');
+      sectionCamera.classList.add('hidden');
+      if (stream) stream.getTracks().forEach(t => t.stop());
+    };
+
+    tabCamera.onclick = async () => {
+      tabCamera.className = "flex-1 py-1.5 text-xs font-bold rounded bg-cyan-600 text-black";
+      tabUpload.className = "flex-1 py-1.5 text-xs font-bold rounded text-slate-400 hover:text-white";
+      sectionCamera.classList.remove('hidden');
+      sectionUpload.classList.add('hidden');
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" } }
+        });
+        webcam.srcObject = stream;
+      } catch (err) {
+        alert("Camera permission denied or camera unavailable.");
+      }
+    };
+
+    // File selection
     dropArea.onclick = () => uploader.click();
     uploader.onchange = (e) => {
       targetFile = e.target.files[0];
@@ -91,44 +151,69 @@
       }
     };
 
-    runBtn.onclick = async () => {
+    // Process File upload
+    runBtn.onclick = () => processAudit(targetFile);
+
+    // Snapshot & Process
+    captureBtn.onclick = () => {
+      snapshotCanvas.width = webcam.videoWidth;
+      snapshotCanvas.height = webcam.videoHeight;
+      const ctx = snapshotCanvas.getContext('2d');
+      ctx.drawImage(webcam, 0, 0);
+      snapshotCanvas.toBlob((blob) => {
+        const capturedFile = new File([blob], "live_capture.jpg", { type: "image/jpeg" });
+        processAudit(capturedFile);
+      }, "image/jpeg", 0.95);
+    };
+
+    async function processAudit(file) {
+      if (!file) return;
       runBtn.disabled = true;
       runBtn.innerText = "RUNNING AUDIT...";
+      captureBtn.disabled = true;
+      captureBtn.innerText = "PROCESSING FRAME...";
+
       const form = new FormData();
-      form.append("file", targetFile);
+      form.append("file", file);
 
-      const response = await fetch('/api/audit', { method: 'POST', body: form });
-      const res = await response.json();
+      try {
+        const response = await fetch('/api/audit', { method: 'POST', body: form });
+        const res = await response.json();
 
-      document.getElementById('card-sha').innerText = res.sha256;
-      document.getElementById('card-moire').innerText = res.metrics.screen_spoof ? "RECAPTURED (YES)" : "PHYSICAL CARD";
-      document.getElementById('card-boxes').innerText = res.metrics.tamper_regions + " Detect Zone(s)";
+        document.getElementById('card-sha').innerText = res.sha256;
+        document.getElementById('card-moire').innerText = res.metrics.screen_spoof ? "RECAPTURED (YES)" : "PHYSICAL CARD";
+        document.getElementById('card-boxes').innerText = res.metrics.tamper_regions + " Detect Zone(s)";
 
-      const vEl = document.getElementById('card-verdict');
-      vEl.innerText = res.verdict;
-      vEl.className = "text-lg font-black tracking-wider " + 
-        (res.verdict === "FORGERY DETECTED" ? "text-red-500" : (res.verdict === "SUSPICIOUS" ? "text-yellow-400" : "text-emerald-400"));
+        const vEl = document.getElementById('card-verdict');
+        vEl.innerText = res.verdict;
+        vEl.className = "text-sm md:text-base font-black tracking-wider " + 
+          (res.verdict === "FORGERY DETECTED" ? "text-red-500" : (res.verdict === "SUSPICIOUS" ? "text-yellow-400" : "text-emerald-400"));
 
-      const consoleEl = document.getElementById('flags-console');
-      consoleEl.innerHTML = "";
-      res.flags.forEach(flag => {
-        const item = document.createElement('li');
-        item.className = "text-red-400/90";
-        item.innerText = "[FLAG] " + flag;
-        consoleEl.appendChild(item);
-      });
+        const consoleEl = document.getElementById('flags-console');
+        consoleEl.innerHTML = "";
+        res.flags.forEach(flag => {
+          const item = document.createElement('li');
+          item.className = "text-red-400/90";
+          item.innerText = "[FLAG] " + flag;
+          consoleEl.appendChild(item);
+        });
 
-      document.getElementById('img-annotated').src = res.images.annotated_tamper;
-      document.getElementById('img-annotated').classList.remove('hidden');
-      document.getElementById('p-annotated').classList.add('hidden');
+        document.getElementById('img-annotated').src = res.images.annotated_tamper;
+        document.getElementById('img-annotated').classList.remove('hidden');
+        document.getElementById('p-annotated').classList.add('hidden');
 
-      document.getElementById('img-ela').src = res.images.ela_heatmap;
-      document.getElementById('img-ela').classList.remove('hidden');
-      document.getElementById('p-ela').classList.add('hidden');
+        document.getElementById('img-ela').src = res.images.ela_heatmap;
+        document.getElementById('img-ela').classList.remove('hidden');
+        document.getElementById('p-ela').classList.add('hidden');
+      } catch(err) {
+        alert("Server processing error. Ensure backend is running.");
+      }
 
       runBtn.disabled = false;
       runBtn.innerText = "Execute Forensic Inspection";
-    };
+      captureBtn.disabled = false;
+      captureBtn.innerText = "Snap & Run Forensic Audit";
+    }
   </script>
 </body>
 </html>
