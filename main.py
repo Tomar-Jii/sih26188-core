@@ -1,0 +1,81 @@
+import io
+import base64
+import cv2
+import numpy as np
+from PIL import Image
+from fastapi import FastAPI, File, UploadFile, Request
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+from forensics import DocumentForensicSuite
+
+app = FastAPI(title="AegisID - Defense Grade Forensic Screener")
+templates = Jinja2Templates(directory="templates")
+forensic_suite = DocumentForensicSuite()
+
+def mat_to_base64(mat: np.ndarray) -> str:
+    _, buffer = cv2.imencode('.png', mat)
+    return base64.b64encode(buffer).decode('utf-8')
+
+def pil_to_base64(img: Image.Image) -> str:
+    buffered = io.BytesIO()
+    img.save(buffered, format="PNG")
+    return base64.b64encode(buffered.getvalue()).decode('utf-8')
+
+@app.get("/", response_class=HTMLResponse)
+async def serve_dashboard(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
+
+@app.post("/api/audit")
+async def audit_document(file: UploadFile = File(...)):
+    raw_bytes = await file.read()
+    sha256_hash = forensic_suite.compute_sha256(raw_bytes)
+    
+    orig_pil = Image.open(io.BytesIO(raw_bytes))
+    img_cv = cv2.imdecode(np.frombuffer(raw_bytes, np.uint8), cv2.IMREAD_COLOR)
+
+    exif_results = forensic_suite.audit_exif_metadata(orig_pil)
+    moire_results = forensic_suite.analyze_moire_frequency(img_cv)
+    ela_img, annotated_cv, ela_variance, tamper_boxes = forensic_suite.localize_tampering(orig_pil)
+    qr_results = forensic_suite.audit_qr_code(img_cv)
+
+    risk_score = 0
+    flags = []
+
+    if exif_results["software_traces"]:
+        risk_score += 45
+        flags.extend(exif_results["software_traces"])
+
+    if moire_results["is_screen_recapture"]:
+        risk_score += 35
+        flags.append(f"Moiré Optical Artifact Detected (Score: {moire_results['papr_score']}) - Recaptured Screen Spoof.")
+
+    if tamper_boxes > 0:
+        risk_score += min(tamper_boxes * 15, 45)
+        flags.append(f"Pixel Splicing/Inpainting Localized: {tamper_boxes} anomalous regions identified.")
+    elif ela_variance > 32.0:
+        risk_score += 25
+        flags.append("High compression level variance across document surface.")
+
+    if not qr_results["detected"]:
+        flags.append("Document missing secure cryptographic barcode or QR unreadable.")
+
+    risk_score = min(max(risk_score, 4), 99)
+    verdict = "FORGERY DETECTED" if risk_score >= 50 else ("SUSPICIOUS" if risk_score >= 25 else "GENUINE / UNALTERED")
+
+    return {
+        "verdict": verdict,
+        "risk_score": risk_score,
+        "sha256": sha256_hash,
+        "flags": flags,
+        "metrics": {
+            "ela_variance": ela_variance,
+            "tamper_regions": tamper_boxes,
+            "moire_papr": moire_results["papr_score"],
+            "screen_spoof": moire_results["is_screen_recapture"],
+            "qr_status": qr_results["status"]
+        },
+        "images": {
+            "ela_heatmap": f"data:image/png;base64,{pil_to_base64(ela_img)}",
+            "annotated_tamper": f"data:image/png;base64,{mat_to_base64(annotated_cv)}"
+        }
+    }
