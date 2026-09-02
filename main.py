@@ -23,7 +23,7 @@ def pil_to_base64(img: Image.Image) -> str:
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_dashboard(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(request=request, name="index.html")
 
 @app.post("/api/audit")
 async def audit_document(file: UploadFile = File(...)):
