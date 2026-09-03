@@ -1,9 +1,47 @@
 import io
+import re
 import cv2
 import hashlib
 import numpy as np
 from PIL import Image, ImageChops, ImageEnhance
 from PIL.ExifTags import TAGS
+
+class VerhoeffAlgorithm:
+    # Dihedral Group D5 multiplication table
+    d_table = [
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+        [1, 2, 3, 4, 0, 6, 7, 8, 9, 5],
+        [2, 3, 4, 0, 1, 7, 8, 9, 5, 6],
+        [3, 4, 0, 1, 2, 8, 9, 5, 6, 7],
+        [4, 0, 1, 2, 3, 9, 5, 6, 7, 8],
+        [5, 9, 8, 7, 6, 0, 4, 3, 2, 1],
+        [6, 5, 9, 8, 7, 1, 0, 4, 3, 2],
+        [7, 6, 5, 9, 8, 2, 1, 0, 4, 3],
+        [8, 7, 6, 5, 9, 3, 2, 1, 0, 4],
+        [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]
+    ]
+    # Permutation table
+    p_table = [
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+        [1, 5, 7, 6, 2, 8, 3, 0, 9, 4],
+        [5, 8, 0, 3, 7, 9, 6, 1, 4, 2],
+        [8, 9, 1, 6, 0, 4, 3, 5, 2, 7],
+        [9, 4, 5, 3, 1, 2, 6, 8, 7, 0],
+        [4, 2, 8, 6, 5, 7, 3, 9, 0, 1],
+        [2, 7, 9, 3, 8, 0, 6, 4, 1, 5],
+        [7, 0, 4, 6, 9, 1, 3, 2, 5, 8]
+    ]
+
+    @classmethod
+    def validate(cls, num_str: str) -> bool:
+        clean = re.sub(r'\D', '', str(num_str))
+        if len(clean) != 12:
+            return False
+        c = 0
+        digits = [int(x) for x in clean]
+        for i, item in enumerate(reversed(digits)):
+            c = cls.d_table[c][cls.p_table[i % 8][item]]
+        return c == 0
 
 class DocumentForensicSuite:
 
@@ -15,7 +53,7 @@ class DocumentForensicSuite:
     def audit_exif_metadata(image: Image.Image) -> dict:
         metadata = {}
         suspicious_tags = []
-        editing_tools = ["photoshop", "gimp", "canva", "picsart", "coreldraw", "lightroom"]
+        editing_tools = ["photoshop", "gimp", "canva", "picsart", "coreldraw", "lightroom", "snapseed"]
         
         info = image.getexif()
         if info:
@@ -25,7 +63,7 @@ class DocumentForensicSuite:
                 metadata[tag_name] = str(value)
                 for tool in editing_tools:
                     if tool in val_str:
-                        suspicious_tags.append(f"Trace of editing software detected: '{tool.upper()}'")
+                        suspicious_tags.append(f"Editor footprint detected: '{tool.upper()}' in metadata")
         
         return {
             "has_exif": len(metadata) > 0,
@@ -70,7 +108,7 @@ class DocumentForensicSuite:
         ela_cv = cv2.cvtColor(np.array(ela_enhanced), cv2.COLOR_RGB2BGR)
         gray_ela = cv2.cvtColor(ela_cv, cv2.COLOR_BGR2GRAY)
         
-        _, thresh = cv2.threshold(gray_ela, 150, 255, cv2.THRESH_BINARY)
+        _, thresh = cv2.threshold(gray_ela, 145, 255, cv2.THRESH_BINARY)
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
         closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
         
@@ -80,10 +118,10 @@ class DocumentForensicSuite:
         
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            if 120 < area < 40000:
+            if 100 < area < 35000:
                 x, y, w, h = cv2.boundingRect(cnt)
                 cv2.rectangle(annotated_cv, (x, y), (x + w, y + h), (0, 0, 255), 2)
-                cv2.putText(annotated_cv, "ANOMALY", (x, max(y - 5, 15)),
+                cv2.putText(annotated_cv, "TAMPER", (x, max(y - 5, 15)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1, cv2.LINE_AA)
                 tamper_boxes += 1
                 

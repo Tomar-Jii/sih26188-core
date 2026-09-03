@@ -3,183 +3,250 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AegisID - Identity Authenticity Screener</title>
+  <title>AegisID - Defense Forensic Screener</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
   <style>
     body { font-family: 'Plus Jakarta Sans', sans-serif; }
+    .mono { font-family: 'JetBrains Mono', monospace; }
+    @media print {
+      body * { visibility: hidden; }
+      #print-dossier, #print-dossier * { visibility: visible; }
+      #print-dossier { position: absolute; left: 0; top: 0; width: 100%; display: block !important; }
+    }
   </style>
 </head>
-<body class="bg-[#090d16] text-slate-100 min-h-screen">
+<body class="bg-[#080d18] text-slate-100 min-h-screen antialiased">
 
-  <!-- Navbar -->
-  <header class="border-b border-slate-800 bg-[#0d1322]/80 backdrop-blur sticky top-0 z-50 px-4 md:px-8 py-3.5 flex justify-between items-center">
+  <!-- Header -->
+  <header class="border-b border-slate-800 bg-[#0d1424]/90 backdrop-blur sticky top-0 z-40 px-4 md:px-8 py-3.5 flex justify-between items-center">
     <div class="flex items-center space-x-3">
       <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center shadow-lg shadow-cyan-500/20">
         <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
       </div>
       <div>
         <h1 class="text-base font-bold tracking-tight text-white flex items-center gap-2">
-          AegisID <span class="text-[10px] uppercase font-semibold bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 px-2 py-0.5 rounded-full">Forensic Screener</span>
+          AegisID <span class="text-[10px] uppercase font-semibold bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 px-2 py-0.5 rounded-full mono">Forensic Lab</span>
         </h1>
         <p class="text-[11px] text-slate-400">SIH26188 // Ministry of Home Affairs</p>
       </div>
     </div>
-    <div class="flex items-center gap-2">
-      <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
-      <span class="text-xs font-semibold text-emerald-400">System Ready</span>
+    <div class="flex items-center gap-3">
+      <button id="btn-export-dossier" class="hidden md:flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-slate-700 text-xs font-semibold px-3 py-1.5 rounded-lg transition opacity-50 cursor-not-allowed" disabled>
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+        Export BSA 65B Dossier
+      </button>
+      <span class="text-xs font-semibold text-emerald-400 flex items-center gap-1.5">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span> Live
+      </span>
     </div>
   </header>
 
   <main class="max-w-6xl mx-auto p-4 md:p-6 space-y-6">
 
-    <!-- Top Ingestion Card -->
-    <div class="bg-[#0f172a] border border-slate-800 rounded-2xl p-4 md:p-6 shadow-xl">
-      <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+    <!-- Upload & Parameter Card -->
+    <div class="bg-[#0f172a] border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+      <div class="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-slate-800">
         <div>
-          <h2 class="text-sm md:text-base font-bold text-white">Document Verification Portal</h2>
-          <p class="text-xs text-slate-400 mt-0.5">Upload or scan any government ID (Aadhaar, PAN, Voter Card, Driving License)</p>
+          <h2 class="text-sm md:text-base font-bold text-white">Document Forensic Ingestion</h2>
+          <p class="text-xs text-slate-400">Upload Aadhaar / PAN / Voter Card with optional Number for Verhoeff Math Verification</p>
         </div>
-        
-        <!-- Toggle Upload / Camera -->
         <div class="inline-flex bg-slate-950 p-1 rounded-xl border border-slate-800 self-start md:self-auto">
-          <button id="tab-upload" class="px-4 py-1.5 rounded-lg text-xs font-semibold bg-cyan-600 text-white transition">Upload File</button>
-          <button id="tab-camera" class="px-4 py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:text-white transition">Live Camera</button>
+          <button id="tab-upload" class="px-4 py-1.5 rounded-lg text-xs font-semibold bg-cyan-600 text-white">Upload File</button>
+          <button id="tab-camera" class="px-4 py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:text-white">Live Camera</button>
         </div>
       </div>
 
-      <div class="mt-4">
-        <!-- File Picker -->
-        <div id="section-upload">
-          <label for="doc-upload" class="border-2 border-dashed border-slate-700 hover:border-cyan-500/60 rounded-xl p-6 flex flex-col items-center justify-center cursor-pointer transition bg-slate-950/40 group">
-            <input type="file" id="doc-upload" class="hidden" accept="image/*" />
-            <div class="w-12 h-12 rounded-full bg-cyan-500/10 text-cyan-400 flex items-center justify-center mb-2 group-hover:scale-110 transition">
-              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+        <!-- Ingestion Source -->
+        <div class="md:col-span-2">
+          <div id="section-upload">
+            <label for="doc-upload" class="border-2 border-dashed border-slate-700 hover:border-cyan-500/60 rounded-xl p-4 flex items-center justify-center gap-3 cursor-pointer transition bg-slate-950/40">
+              <input type="file" id="doc-upload" class="hidden" accept="image/*" />
+              <div class="w-9 h-9 rounded-lg bg-cyan-500/10 text-cyan-400 flex items-center justify-center">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+              </div>
+              <div class="text-left">
+                <span id="file-name-label" class="text-xs font-semibold text-slate-300 block">Select Document Image</span>
+                <span class="text-[10px] text-slate-500">Tap to browse files or gallery</span>
+              </div>
+            </label>
+          </div>
+          <div id="section-camera" class="hidden space-y-2">
+            <div class="relative bg-black rounded-xl overflow-hidden border border-slate-800 aspect-video max-h-48 flex items-center justify-center">
+              <video id="webcam" autoplay playsinline class="w-full h-full object-cover"></video>
+              <canvas id="snapshot-canvas" class="hidden"></canvas>
             </div>
-            <span id="file-name-label" class="text-xs font-semibold text-slate-300">Tap to upload Document Photo</span>
-            <span class="text-[11px] text-slate-500 mt-1">JPEG, PNG or Screen capture accepted</span>
-          </label>
-          <button id="run-audit-btn" class="w-full mt-3 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold py-3 rounded-xl text-xs uppercase tracking-wider shadow-lg shadow-cyan-500/20 transition disabled:opacity-40" disabled>
-            Start Complete Forensic Screening
-          </button>
+            <button id="capture-btn" class="w-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold py-2 rounded-lg text-xs uppercase tracking-wider transition">Snap Frame</button>
+          </div>
         </div>
 
-        <!-- Camera Stream -->
-        <div id="section-camera" class="hidden space-y-3">
-          <div class="relative bg-black rounded-xl overflow-hidden border border-slate-800 aspect-video md:aspect-[21/9] max-h-64 flex items-center justify-center">
-            <video id="webcam" autoplay playsinline class="w-full h-full object-cover"></video>
-            <canvas id="snapshot-canvas" class="hidden"></canvas>
-          </div>
-          <button id="capture-btn" class="w-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold py-3 rounded-xl text-xs uppercase tracking-wider transition">
-            Capture Photo & Verify
+        <!-- Optional Verhoeff Checksum Input -->
+        <div>
+          <label class="block text-[11px] font-bold text-slate-300 mb-1">
+            AADHAAR NUMBER (FOR MATH AUDIT)
+          </label>
+          <input type="text" id="id-number" placeholder="e.g. 6422 7371 1014" maxlength="14" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-cyan-500 mono" />
+          <button id="run-audit-btn" class="w-full mt-2 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold py-2.5 rounded-xl text-xs uppercase tracking-wider shadow-lg shadow-cyan-500/20 transition disabled:opacity-40" disabled>
+            Execute Full Audit
           </button>
         </div>
       </div>
     </div>
 
-    <!-- Verification Output Section -->
-    <div id="results-area" class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <!-- Output Dashboard -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
       
-      <!-- Verdict Card & Tests Checklist -->
-      <div class="bg-[#0f172a] border border-slate-800 rounded-2xl p-5 space-y-5">
-        
-        <!-- Score Header -->
+      <!-- 5-Point Security Checklist -->
+      <div class="bg-[#0f172a] border border-slate-800 rounded-2xl p-5 space-y-4">
         <div>
-          <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400">Authenticity Verdict</span>
-          <div class="mt-2 flex items-baseline justify-between">
-            <span id="verdict-tag" class="text-lg font-extrabold text-slate-500">AWAITING SCAN</span>
-            <span id="risk-score" class="text-2xl font-black text-slate-600">--%</span>
+          <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400">Security Scorecard</span>
+          <div class="mt-1 flex items-baseline justify-between">
+            <span id="verdict-tag" class="text-base font-extrabold text-slate-500">STANDBY</span>
+            <span id="risk-score" class="text-xl font-black text-slate-600 mono">--%</span>
           </div>
           <div class="w-full bg-slate-800 h-2 rounded-full mt-2 overflow-hidden">
             <div id="score-bar" class="h-full bg-slate-600 transition-all duration-500" style="width: 0%"></div>
           </div>
         </div>
 
-        <!-- 4 Key Forensic Checks -->
-        <div class="space-y-3 border-t border-slate-800/80 pt-4">
-          <h3 class="text-xs font-bold uppercase tracking-wider text-slate-300">4-Point Security Inspection</h3>
-
-          <!-- Test 1 -->
-          <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-slate-800">
+        <div class="space-y-2 border-t border-slate-800/80 pt-3">
+          
+          <!-- Test 1: Moiré -->
+          <div class="flex items-center justify-between p-2 rounded-xl bg-slate-950/60 border border-slate-800/80">
             <div>
               <div class="text-xs font-semibold text-slate-200">1. Physical Card Liveness</div>
-              <div class="text-[10px] text-slate-400">Detects screen/monitor photos <span class="text-cyan-400">(Moiré FFT)</span></div>
+              <div class="text-[10px] text-slate-400">Screen detection <span class="text-cyan-400 mono">(FFT Moiré)</span></div>
             </div>
-            <span id="test-screen" class="text-xs font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400">Pending</span>
+            <span id="test-screen" class="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400">Pending</span>
           </div>
 
-          <!-- Test 2 -->
-          <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-slate-800">
+          <!-- Test 2: Verhoeff -->
+          <div class="flex items-center justify-between p-2 rounded-xl bg-slate-950/60 border border-slate-800/80">
             <div>
-              <div class="text-xs font-semibold text-slate-200">2. Photoshop Tamper Detection</div>
-              <div class="text-[10px] text-slate-400">Flags altered text/numbers <span class="text-cyan-400">(ELA Heatmap)</span></div>
+              <div class="text-xs font-semibold text-slate-200">2. Dihedral Checksum</div>
+              <div class="text-[10px] text-slate-400">Aadhaar math check <span class="text-cyan-400 mono">(Verhoeff D5)</span></div>
             </div>
-            <span id="test-tamper" class="text-xs font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400">Pending</span>
+            <span id="test-verhoeff" class="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400">Pending</span>
           </div>
 
-          <!-- Test 3 -->
-          <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-slate-800">
+          <!-- Test 3: ELA Tampering -->
+          <div class="flex items-center justify-between p-2 rounded-xl bg-slate-950/60 border border-slate-800/80">
             <div>
-              <div class="text-xs font-semibold text-slate-200">3. Editing Tool Footprint</div>
-              <div class="text-[10px] text-slate-400">Photoshop/Canva traces <span class="text-cyan-400">(EXIF Metadata)</span></div>
+              <div class="text-xs font-semibold text-slate-200">3. Tamper Bounding Zones</div>
+              <div class="text-[10px] text-slate-400">Cut-paste edits <span class="text-cyan-400 mono">(Adaptive ELA)</span></div>
             </div>
-            <span id="test-exif" class="text-xs font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400">Pending</span>
+            <span id="test-tamper" class="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400">Pending</span>
           </div>
 
-          <!-- Test 4 -->
-          <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-slate-800">
+          <!-- Test 4: Metadata Tools -->
+          <div class="flex items-center justify-between p-2 rounded-xl bg-slate-950/60 border border-slate-800/80">
             <div>
-              <div class="text-xs font-semibold text-slate-200">4. QR Code & Barcode</div>
-              <div class="text-[10px] text-slate-400">Decodes internal payload <span class="text-cyan-400">(Offline QR)</span></div>
+              <div class="text-xs font-semibold text-slate-200">4. Editor Footprints</div>
+              <div class="text-[10px] text-slate-400">Photoshop/Canva traces <span class="text-cyan-400 mono">(EXIF)</span></div>
             </div>
-            <span id="test-qr" class="text-xs font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400">Pending</span>
+            <span id="test-exif" class="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400">Pending</span>
           </div>
+
+          <!-- Test 5: QR Cryptography -->
+          <div class="flex items-center justify-between p-2 rounded-xl bg-slate-950/60 border border-slate-800/80">
+            <div>
+              <div class="text-xs font-semibold text-slate-200">5. Cryptographic QR</div>
+              <div class="text-[10px] text-slate-400">Byte-level integrity <span class="text-cyan-400 mono">(QR Code)</span></div>
+            </div>
+            <span id="test-qr" class="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400">Pending</span>
+          </div>
+
         </div>
 
-        <!-- Evidence SHA -->
-        <div class="border-t border-slate-800/80 pt-3">
-          <span class="text-[10px] text-slate-500 block uppercase font-bold">Evidence SHA-256 Checksum</span>
-          <span id="evidence-sha" class="text-[9px] text-slate-400 font-mono break-all">Not yet computed</span>
+        <div class="border-t border-slate-800/80 pt-2">
+          <span class="text-[10px] text-slate-500 block uppercase font-bold">SHA-256 HASH (CHAIN OF CUSTODY)</span>
+          <span id="evidence-sha" class="text-[9px] text-slate-400 mono break-all">Not yet computed</span>
         </div>
       </div>
 
-      <!-- Visual Forensic Viewers -->
-      <div class="lg:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4">
+      <!-- Interactive Split Comparison & Heatmap -->
+      <div class="lg:col-span-2 space-y-4">
         
-        <!-- Tampered Bounding Boxes -->
-        <div class="bg-[#0f172a] border border-slate-800 rounded-2xl p-4 flex flex-col justify-between">
-          <div>
-            <div class="flex justify-between items-center mb-2">
-              <h3 class="text-xs font-bold uppercase tracking-wider text-slate-200">Detected Tamper Zones</h3>
-              <span class="text-[10px] bg-red-500/10 text-red-400 border border-red-500/20 px-2 py-0.5 rounded font-semibold">Altered Text Areas</span>
+        <!-- Juxtapose Slider Box -->
+        <div class="bg-[#0f172a] border border-slate-800 rounded-2xl p-4">
+          <div class="flex justify-between items-center mb-2">
+            <div>
+              <h3 class="text-xs font-bold uppercase tracking-wider text-slate-200">Interactive Forensic Overlay Slider</h3>
+              <p class="text-[11px] text-slate-400">Drag slider to peel between original document and localized tampering zones.</p>
             </div>
-            <p class="text-[11px] text-slate-400 mb-3">Red boxes pinpoint specific altered digits, modified dates, or swapped pictures.</p>
+            <span class="text-[10px] bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 px-2 py-0.5 rounded mono">Juxtapose</span>
           </div>
-          <div class="h-60 bg-black rounded-xl border border-slate-800 flex items-center justify-center overflow-hidden">
-            <img id="img-annotated" class="max-h-full max-w-full object-contain hidden" />
-            <span id="p-annotated" class="text-xs text-slate-600">Scan a document to preview</span>
+
+          <div class="relative w-full h-64 bg-black rounded-xl overflow-hidden border border-slate-800 select-none" id="slider-container">
+            <img id="view-under" class="absolute inset-0 w-full h-full object-contain pointer-events-none hidden" />
+            <div id="view-over-wrap" class="absolute inset-0 w-1/2 h-full overflow-hidden border-r-2 border-cyan-400 bg-black">
+              <img id="view-over" class="absolute inset-0 w-full h-full object-contain max-w-none pointer-events-none hidden" />
+            </div>
+            <span id="slider-placeholder" class="absolute inset-0 flex items-center justify-center text-xs text-slate-600">Perform scan to activate interactive slider</span>
+          </div>
+          <div class="mt-2 flex items-center gap-3">
+            <span class="text-[10px] text-slate-400 font-bold uppercase">Original</span>
+            <input type="range" id="split-range" min="0" max="100" value="50" class="w-full accent-cyan-400 cursor-pointer" />
+            <span class="text-[10px] text-red-400 font-bold uppercase">Forensic Tamper</span>
           </div>
         </div>
 
-        <!-- ELA Heatmap -->
-        <div class="bg-[#0f172a] border border-slate-800 rounded-2xl p-4 flex flex-col justify-between">
-          <div>
-            <div class="flex justify-between items-center mb-2">
-              <h3 class="text-xs font-bold uppercase tracking-wider text-slate-200">Pixel Heatmap Analysis</h3>
-              <span class="text-[10px] bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 px-2 py-0.5 rounded font-semibold">Compression Audit</span>
-            </div>
-            <p class="text-[11px] text-slate-400 mb-3">Bright glowing artifacts reveal areas pasted from other images or edited later.</p>
+        <!-- Heatmap Preview Card -->
+        <div class="bg-[#0f172a] border border-slate-800 rounded-2xl p-4 flex items-center justify-between">
+          <div class="space-y-1">
+            <h4 class="text-xs font-bold text-slate-200 uppercase">Pixel Compression Discrepancy Heatmap</h4>
+            <p class="text-[11px] text-slate-400">Bright luminescent clusters reveal altered typography and spliced segments.</p>
           </div>
-          <div class="h-60 bg-black rounded-xl border border-slate-800 flex items-center justify-center overflow-hidden">
-            <img id="img-ela" class="max-h-full max-w-full object-contain hidden" />
-            <span id="p-ela" class="text-xs text-slate-600">Heatmap will appear here</span>
+          <div class="w-24 h-16 bg-black rounded-lg border border-slate-800 overflow-hidden flex items-center justify-center">
+            <img id="img-ela-mini" class="w-full h-full object-contain hidden" />
+            <span id="p-ela-mini" class="text-[9px] text-slate-600">Pending</span>
           </div>
         </div>
 
       </div>
     </div>
   </main>
+
+  <!-- Printable BSA Section 65B Dossier -->
+  <div id="print-dossier" class="hidden bg-white text-black p-10 max-w-4xl mx-auto space-y-6">
+    <div class="border-b-2 border-black pb-4 flex justify-between items-start">
+      <div>
+        <h1 class="text-xl font-black tracking-tight uppercase">National Cyber Crime Reporting Portal // NCFL</h1>
+        <p class="text-xs font-bold text-gray-700">Digital Document Forensic & Authenticity Audit Report</p>
+        <p class="text-[10px] text-gray-600">Admissible under Section 63 & 65B of Bharatiya Sakshya Adhiniyam, 2023 (BSA)</p>
+      </div>
+      <div class="text-right">
+        <span class="text-xs font-mono font-bold border border-black px-2 py-1">CASE REF: MHA-SIH-2026</span>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-2 gap-4 text-xs font-mono border-b border-gray-300 pb-4">
+      <div><strong>Audit Timestamp:</strong> <span id="dos-time">--</span></div>
+      <div><strong>Verdict:</strong> <span id="dos-verdict" class="font-bold">--</span></div>
+      <div class="col-span-2 break-all"><strong>Evidence SHA-256:</strong> <span id="dos-sha">--</span></div>
+      <div><strong>Moiré Screen Spoof:</strong> <span id="dos-moire">--</span></div>
+      <div><strong>Verhoeff Dihedral Status:</strong> <span id="dos-verhoeff">--</span></div>
+      <div><strong>Tamper Regions Flagged:</strong> <span id="dos-tamper">--</span></div>
+      <div><strong>EXIF Metadata Anomaly:</strong> <span id="dos-exif">--</span></div>
+    </div>
+
+    <div class="space-y-2">
+      <h3 class="text-xs font-bold uppercase tracking-wider">Investigative Evidence Bounding Overview</h3>
+      <div class="h-64 border border-gray-400 flex items-center justify-center">
+        <img id="dos-img" class="max-h-full max-w-full object-contain" />
+      </div>
+    </div>
+
+    <div class="border-t border-black pt-4 text-[10px] text-gray-600 space-y-2">
+      <p><strong>65B Certificate:</strong> This electronic report is generated automatically by AegisID Forensic Lab based on mathematical error level analysis, 2D Fast Fourier Transform frequency distribution, and Verhoeff permutation calculus without digital tampering during ingestion.</p>
+      <div class="pt-8 flex justify-between">
+        <span>Forensic Systems Officer: <strong>[SIH AUTOMATED AUDITOR]</strong></span>
+        <span>Authorized Signature Stamp: ___________________________</span>
+      </div>
+    </div>
+  </div>
 
   <script>
     const tabUpload = document.getElementById('tab-upload');
@@ -192,36 +259,40 @@
     const uploader = document.getElementById('doc-upload');
     const runBtn = document.getElementById('run-audit-btn');
     const fileLabel = document.getElementById('file-name-label');
+    const splitRange = document.getElementById('split-range');
+    const viewOverWrap = document.getElementById('view-over-wrap');
+    const viewOver = document.getElementById('view-over');
+    const viewUnder = document.getElementById('view-under');
+    const sliderContainer = document.getElementById('slider-container');
+    const btnExportDossier = document.getElementById('btn-export-dossier');
+
     let targetFile = null;
     let stream = null;
+    let latestAuditData = null;
 
     tabUpload.onclick = () => {
-      tabUpload.className = "px-4 py-1.5 rounded-lg text-xs font-semibold bg-cyan-600 text-white transition";
-      tabCamera.className = "px-4 py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:text-white transition";
+      tabUpload.className = "px-4 py-1.5 rounded-lg text-xs font-semibold bg-cyan-600 text-white";
+      tabCamera.className = "px-4 py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:text-white";
       sectionUpload.classList.remove('hidden');
       sectionCamera.classList.add('hidden');
       if (stream) stream.getTracks().forEach(t => t.stop());
     };
 
     tabCamera.onclick = async () => {
-      tabCamera.className = "px-4 py-1.5 rounded-lg text-xs font-semibold bg-cyan-600 text-white transition";
-      tabUpload.className = "px-4 py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:text-white transition";
+      tabCamera.className = "px-4 py-1.5 rounded-lg text-xs font-semibold bg-cyan-600 text-white";
+      tabUpload.className = "px-4 py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:text-white";
       sectionCamera.classList.remove('hidden');
       sectionUpload.classList.add('hidden');
       try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: "environment" } }
-        });
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } } });
         webcam.srcObject = stream;
-      } catch (err) {
-        alert("Camera access denied or unavailable.");
-      }
+      } catch (err) { alert("Camera access denied or unavailable."); }
     };
 
     uploader.onchange = (e) => {
       targetFile = e.target.files[0];
       if (targetFile) {
-        fileLabel.innerText = "Selected: " + targetFile.name;
+        fileLabel.innerText = "Loaded: " + targetFile.name;
         runBtn.disabled = false;
       }
     };
@@ -239,21 +310,24 @@
       }, "image/jpeg", 0.95);
     };
 
+    splitRange.oninput = (e) => {
+      viewOverWrap.style.width = e.target.value + "%";
+    };
+
     async function processAudit(file) {
       if (!file) return;
       runBtn.disabled = true;
-      runBtn.innerText = "RUNNING FULL SECURITY AUDIT...";
-      captureBtn.disabled = true;
-      captureBtn.innerText = "ANALYZING...";
+      runBtn.innerText = "AUDITING EVIDENCE...";
 
       const form = new FormData();
       form.append("file", file);
+      form.append("id_number", document.getElementById('id-number').value);
 
       try {
-        const response = await fetch('/api/audit', { method: 'POST', body: form });
-        const res = await response.json();
+        const res = await (await fetch('/api/audit', { method: 'POST', body: form })).json();
+        latestAuditData = res;
 
-        // 1. Verdict & Score
+        // Scorecard
         const tag = document.getElementById('verdict-tag');
         const score = document.getElementById('risk-score');
         const bar = document.getElementById('score-bar');
@@ -263,81 +337,96 @@
         bar.style.width = res.risk_score + "%";
 
         if (res.verdict === "FORGERY DETECTED") {
-          tag.className = "text-lg font-extrabold text-red-400";
-          score.className = "text-2xl font-black text-red-400";
+          tag.className = "text-base font-extrabold text-red-400";
+          score.className = "text-xl font-black text-red-400 mono";
           bar.className = "h-full bg-red-500 transition-all duration-500";
         } else if (res.verdict === "SUSPICIOUS") {
-          tag.className = "text-lg font-extrabold text-amber-400";
-          score.className = "text-2xl font-black text-amber-400";
+          tag.className = "text-base font-extrabold text-amber-400";
+          score.className = "text-xl font-black text-amber-400 mono";
           bar.className = "h-full bg-amber-500 transition-all duration-500";
         } else {
           tag.innerText = "GENUINE / AUTHENTIC";
-          tag.className = "text-lg font-extrabold text-emerald-400";
-          score.className = "text-2xl font-black text-emerald-400";
+          tag.className = "text-base font-extrabold text-emerald-400";
+          score.className = "text-xl font-black text-emerald-400 mono";
           bar.className = "h-full bg-emerald-500 transition-all duration-500";
         }
 
-        // 2. Checklist Badges
-        const tScreen = document.getElementById('test-screen');
-        if (res.metrics.screen_spoof) {
-          tScreen.className = "text-xs font-bold px-2 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30";
-          tScreen.innerText = "Spoofed Screen";
+        // Checklist Statuses
+        setCheck('test-screen', res.metrics.screen_spoof, "Spoofed Screen", "Real Surface", true);
+        
+        const tVerhoeff = document.getElementById('test-verhoeff');
+        if (res.verhoeff_status.includes("PASSED")) {
+          tVerhoeff.className = "text-[11px] font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30";
+          tVerhoeff.innerText = "Passed (D5)";
+        } else if (res.verhoeff_status.includes("FAILED")) {
+          tVerhoeff.className = "text-[11px] font-bold px-2 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30";
+          tVerhoeff.innerText = "Math Fraud";
         } else {
-          tScreen.className = "text-xs font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30";
-          tScreen.innerText = "Real Surface";
+          tVerhoeff.className = "text-[11px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400";
+          tVerhoeff.innerText = "Not Provided";
         }
 
-        const tTamper = document.getElementById('test-tamper');
-        if (res.metrics.tamper_regions > 0) {
-          tTamper.className = "text-xs font-bold px-2 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30";
-          tTamper.innerText = res.metrics.tamper_regions + " Alterations";
-        } else {
-          tTamper.className = "text-xs font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30";
-          tTamper.innerText = "Intact";
-        }
+        setCheck('test-tamper', res.metrics.tamper_regions > 0, res.metrics.tamper_regions + " Alterations", "Intact", true);
+        
+        const hasSoftwareFlag = res.flags.some(f => f.toLowerCase().includes('editor footprint'));
+        setCheck('test-exif', hasSoftwareFlag, "Editor Trace", "Clean", true);
+        
+        setCheck('test-qr', !res.metrics.qr_status.includes("Successfully"), "Missing/Corrupt", "Verified", false);
 
-        const tExif = document.getElementById('test-exif');
-        const hasSoftwareFlag = res.flags.some(f => f.toLowerCase().includes('trace of editing'));
-        if (hasSoftwareFlag) {
-          tExif.className = "text-xs font-bold px-2 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30";
-          tExif.innerText = "Editor Trace";
-        } else {
-          tExif.className = "text-xs font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30";
-          tExif.innerText = "Clean";
-        }
-
-        const tQr = document.getElementById('test-qr');
-        if (res.metrics.qr_status.includes("Successfully")) {
-          tQr.className = "text-xs font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30";
-          tQr.innerText = "Verified";
-        } else {
-          tQr.className = "text-xs font-bold px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 border border-amber-500/30";
-          tQr.innerText = "No QR Found";
-        }
-
-        // 3. Evidence Hash
         document.getElementById('evidence-sha').innerText = res.sha256;
 
-        // 4. Update Images
-        const imgAnn = document.getElementById('img-annotated');
-        imgAnn.src = res.images.annotated_tamper;
-        imgAnn.classList.remove('hidden');
-        document.getElementById('p-annotated').classList.add('hidden');
+        // Juxtapose Setup
+        document.getElementById('slider-placeholder').classList.add('hidden');
+        viewUnder.src = res.images.orig_b64;
+        viewUnder.classList.remove('hidden');
 
-        const imgEla = document.getElementById('img-ela');
-        imgEla.src = res.images.ela_heatmap;
-        imgEla.classList.remove('hidden');
-        document.getElementById('p-ela').classList.add('hidden');
+        viewOver.src = res.images.annotated_tamper;
+        viewOver.style.width = sliderContainer.clientWidth + "px";
+        viewOver.classList.remove('hidden');
 
-      } catch (err) {
-        alert("Error during document screening.");
-      }
+        document.getElementById('img-ela-mini').src = res.images.ela_heatmap;
+        document.getElementById('img-ela-mini').classList.remove('hidden');
+        document.getElementById('p-ela-mini').classList.add('hidden');
 
+        // Enable Dossier
+        btnExportDossier.disabled = false;
+        btnExportDossier.classList.remove('opacity-50', 'cursor-not-allowed');
+
+      } catch (err) { alert("Forensic Screening Failure."); }
       runBtn.disabled = false;
-      runBtn.innerText = "Start Complete Forensic Screening";
-      captureBtn.disabled = false;
-      captureBtn.innerText = "Capture Photo & Verify";
+      runBtn.innerText = "Execute Full Audit";
     }
+
+    function setCheck(id, isBad, badText, goodText, invert=true) {
+      const el = document.getElementById(id);
+      const condition = invert ? isBad : !isBad;
+      if (condition) {
+        el.className = "text-[11px] font-bold px-2 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30";
+        el.innerText = badText;
+      } else {
+        el.className = "text-[11px] font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30";
+        el.innerText = goodText;
+      }
+    }
+
+    btnExportDossier.onclick = () => {
+      if (!latestAuditData) return;
+      document.getElementById('dos-time').innerText = new Date().toLocaleString();
+      document.getElementById('dos-verdict').innerText = latestAuditData.verdict + " (" + latestAuditData.risk_score + "% Risk)";
+      document.getElementById('dos-sha').innerText = latestAuditData.sha256;
+      document.getElementById('dos-moire').innerText = latestAuditData.metrics.screen_spoof ? "YES (Electronic Screen)" : "NO (Physical Paper)";
+      document.getElementById('dos-verhoeff').innerText = latestAuditData.verhoeff_status;
+      document.getElementById('dos-tamper').innerText = latestAuditData.metrics.tamper_regions + " Altered Zone(s)";
+      document.getElementById('dos-exif').innerText = latestAuditData.flags.find(f => f.includes('Editor')) || "No Editing Footprints";
+      document.getElementById('dos-img').src = latestAuditData.images.annotated_tamper;
+      window.print();
+    };
+
+    window.onresize = () => {
+      if (latestAuditData) {
+        viewOver.style.width = sliderContainer.clientWidth + "px";
+      }
+    };
   </script>
 </body>
 </html>
