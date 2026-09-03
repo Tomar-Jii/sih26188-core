@@ -1,20 +1,31 @@
 import io
+import re
+import uuid
 import base64
 import cv2
 import numpy as np
+from datetime import datetime
 from PIL import Image
-from fastapi import FastAPI, File, UploadFile, Form, Request
+from fastapi import FastAPI, File, UploadFile, Form, Request, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
-from forensics import DocumentForensicSuite, VerhoeffAlgorithm
 
-app = FastAPI(title="AegisID - Defense Grade Forensic Screener")
+from forensics import (
+    ICAO9303Validator,
+    DocumentQualityEngine,
+    MultiSignalForensics,
+    RiskFusionEngine
+)
+
+app = FastAPI(title="AegisID - Defense Grade Forensic Screener (SSB/MHA)")
 templates = Jinja2Templates(directory="templates")
-forensic_suite = DocumentForensicSuite()
+
+# In-Memory Case & Evidence Registry (Ephemeral & Private)
+CASE_REGISTRY: dict = {}
 
 def mat_to_base64(mat: np.ndarray) -> str:
     if mat is None:
-        return None
+        return ""
     _, buffer = cv2.imencode('.png', mat)
     return base64.b64encode(buffer).decode('utf-8')
 
@@ -28,90 +39,107 @@ async def serve_dashboard(request: Request):
     return templates.TemplateResponse(request=request, name="index.html")
 
 @app.post("/api/audit")
-async def audit_document(
+async def execute_complete_audit(
     file: UploadFile = File(...),
-    id_number: str = Form("")
+    case_id: str = Form(None),
+    doc_type_hint: str = Form("AUTO_DETECT"),
+    mrz_raw_input: str = Form("")
 ):
+    """
+    Primary Unified Screening Endpoint executing the complete 8-stage forensic pipeline.
+    """
     try:
         raw_bytes = await file.read()
-        sha256_hash = forensic_suite.compute_sha256(raw_bytes)
+        sha256_hash = MultiSignalForensics.compute_sha256(raw_bytes)
         
         orig_pil = Image.open(io.BytesIO(raw_bytes))
         img_cv = cv2.imdecode(np.frombuffer(raw_bytes, np.uint8), cv2.IMREAD_COLOR)
+        if img_cv is None:
+            raise ValueError("Unable to decode input as a valid graphical document.")
 
-        structure_check = forensic_suite.validate_id_document_structure(img_cv)
-        exif_results = forensic_suite.audit_exif_metadata(orig_pil)
-        moire_results = forensic_suite.analyze_moire_frequency(img_cv)
-        ela_img, annotated_cv, ela_variance, tamper_boxes = forensic_suite.localize_tampering(orig_pil)
-        qr_results = forensic_suite.audit_qr_code(img_cv)
-        cropped_face = forensic_suite.extract_face_portrait(img_cv)
+        timestamp_iso = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%SZ")
 
-        risk_score = 0
-        flags = []
-        verhoeff_status = "Not Provided"
+        # 1. Quality Assessment Gate
+        quality_eval = DocumentQualityEngine.assess_quality(img_cv)
 
-        if not structure_check["is_valid_id"]:
-            risk_score = 100
-            flags.append(f"[GATEWAY REJECT] {structure_check['reason']}")
-            verdict = "NOT AN ID DOCUMENT"
-            verhoeff_status = "SKIPPED"
-        else:
-            clean_id = id_number.replace(" ", "").strip()
-            if clean_id:
-                if len(clean_id) == 12 and clean_id.isdigit():
-                    is_valid_aadhaar = VerhoeffAlgorithm.validate(clean_id)
-                    if is_valid_aadhaar:
-                        verhoeff_status = "PASSED (Valid Dihedral D5)"
-                    else:
-                        verhoeff_status = "FAILED (Mathematical Forgery)"
-                        risk_score += 55
-                        flags.append("Specified ID number failed Verhoeff Checksum: Sequence is mathematically forged.")
-                else:
-                    verhoeff_status = "INVALID FORMAT"
-                    risk_score += 15
-                    flags.append("Specified ID number does not match 12-digit format.")
+        # 2. Metadata Audit
+        metadata_eval = MultiSignalForensics.audit_exif_metadata(orig_pil)
 
-            # Threat Scoring for Localized Tampering
-            if tamper_boxes >= 1:
-                risk_score += min(tamper_boxes * 25, 65)
-                flags.append(f"Pixel Splicing/Scribble Localized: {tamper_boxes} anomalous region(s) framed in RED.")
+        # 3. Frequency Moiré Screen Recapture Analysis
+        moire_eval = MultiSignalForensics.analyze_moire_frequency(img_cv)
 
-            if exif_results["software_traces"]:
-                risk_score += 40
-                flags.extend(exif_results["software_traces"])
+        # 4. Multi-Signal Spatial Tampering & Boundary Localization
+        forensics_eval = MultiSignalForensics.localize_tampering_multisignal(orig_pil, img_cv)
 
-            if moire_results["is_screen_recapture"]:
-                risk_score += 35
-                flags.append(f"Screen Optical Moiré detected (Score: {moire_results['papr_score']}) - Recaptured from screen.")
+        # 5. Deterministic Validation (MRZ ICAO 9303)
+        mrz_eval = ICAO9303Validator.parse_mrz(mrz_raw_input)
 
-            if not qr_results["detected"]:
-                flags.append("Document lacks readable QR barcode.")
+        # 6. Cross-Field Consistency Checks
+        cross_field = {"conflicts": []}
+        if mrz_eval["is_mrz_detected"] and not mrz_eval["all_checks_passed"]:
+            cross_field["conflicts"].append("MRZ check digit validation failed. Potential string modification.")
 
-            risk_score = min(max(risk_score, 4), 99)
-            verdict = "FORGERY DETECTED" if risk_score >= 50 else ("SUSPICIOUS" if risk_score >= 25 else "GENUINE / AUTHENTIC")
+        # 7. Risk Fusion & Explainable Synthesis
+        deterministic_pkg = {"mrz": mrz_eval}
+        fusion_input_forensics = {
+            "box_count": forensics_eval["box_count"],
+            "ela_variance": forensics_eval["ela_variance"],
+            "moire": moire_eval
+        }
+        
+        fusion_decision = RiskFusionEngine.evaluate(
+            quality=quality_eval,
+            deterministic=deterministic_pkg,
+            forensics=fusion_input_forensics,
+            metadata=metadata_eval,
+            cross_field=cross_field
+        )
 
-        face_b64 = mat_to_base64(cropped_face)
+        # Build Audit Trail Timeline
+        timeline = [
+            {"time": timestamp_iso, "event": "Document Ingestion & Cryptographic Hashing Completed", "status": "VERIFIED"},
+            {"time": timestamp_iso, "event": f"Pre-Screening Quality Gate: {quality_eval['metrics']['blur_status']} Sharpness", "status": "PASS" if quality_eval["passed"] else "REJECT"},
+            {"time": timestamp_iso, "event": f"Optical Frequency Spectrum Analysis: PAPR {moire_eval['papr_score']}", "status": "SUSPICIOUS" if moire_eval["is_screen_recapture"] else "PASS"},
+            {"time": timestamp_iso, "event": f"Pixel Compression Analysis: {forensics_eval['box_count']} Discrepant Region(s)", "status": "FLAGGED" if forensics_eval["box_count"] > 0 else "PASS"},
+            {"time": timestamp_iso, "event": f"Deterministic MRZ Validation: {'Detected & Verified' if mrz_eval['all_checks_passed'] else ('Detected with Checksum Errors' if mrz_eval['is_mrz_detected'] else 'No MRZ Pattern Presented')}", "status": "PASS" if mrz_eval["all_checks_passed"] else "STANDBY"},
+            {"time": timestamp_iso, "event": f"Risk Engine Synthesis: Score {fusion_decision['risk_score']}/100 ({fusion_decision['risk_level']})", "status": "COMPLETED"}
+        ]
 
-        return {
-            "verdict": verdict,
-            "risk_score": risk_score,
+        assigned_case = case_id if case_id else f"AEG-{datetime.utcnow().strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
+
+        result_payload = {
+            "case_id": assigned_case,
+            "timestamp": timestamp_iso,
             "sha256": sha256_hash,
-            "flags": flags,
-            "is_valid_id": structure_check["is_valid_id"],
-            "verhoeff_status": verhoeff_status,
-            "face_avatar": f"data:image/png;base64,{face_b64}" if face_b64 else None,
-            "metrics": {
-                "ela_variance": ela_variance,
-                "tamper_regions": tamper_boxes,
-                "moire_papr": moire_results["papr_score"],
-                "screen_spoof": moire_results["is_screen_recapture"],
-                "qr_status": qr_results["status"]
+            "quality": quality_eval,
+            "deterministic": deterministic_pkg,
+            "forensics": {
+                "box_count": forensics_eval["box_count"],
+                "ela_variance": forensics_eval["ela_variance"],
+                "regions": forensics_eval["tamper_regions"],
+                "moire": moire_eval
             },
+            "metadata": metadata_eval,
+            "cross_field": cross_field,
+            "risk": fusion_decision,
+            "timeline": timeline,
             "images": {
                 "orig_b64": f"data:image/png;base64,{pil_to_base64(orig_pil)}",
-                "ela_heatmap": f"data:image/png;base64,{pil_to_base64(ela_img)}",
-                "annotated_tamper": f"data:image/png;base64,{mat_to_base64(annotated_cv)}"
+                "annotated_b64": f"data:image/png;base64,{mat_to_base64(forensics_eval['annotated_cv'])}",
+                "ela_b64": f"data:image/png;base64,{pil_to_base64(forensics_eval['ela_enhanced'])}"
             }
         }
-    except Exception as e:
-        return JSONResponse(status_code=400, content={"error": str(e)})
+
+        # Store in registry
+        CASE_REGISTRY[assigned_case] = result_payload
+        return result_payload
+
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"error": "InspectionPipelineError", "details": str(exc)})
+
+@app.get("/api/cases/{case_id}")
+async def fetch_case_record(case_id: str):
+    record = CASE_REGISTRY.get(case_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Case record not found in ephemeral registry.")
+    return record
