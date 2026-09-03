@@ -19,6 +19,7 @@ from aegis_core.validators.qr_engine import MultiPassQREngine
 from aegis_core.forensics.ela import DifferentialELAAnalyzer
 from aegis_core.forensics.texture import TextureFlatnessAnalyzer
 from aegis_core.forensics.gradient import EdgeDiscontinuityAnalyzer
+from aegis_core.forensics.noise import LocalNoiseAnalyzer
 from aegis_core.forensics.moire import OpticalMoireAnalyzer
 from aegis_core.forensics.metadata import MetadataFootprintAnalyzer
 from aegis_core.fusion.cross_field import CrossFieldConsistencyEngine
@@ -72,15 +73,15 @@ async def execute_audit(
     sha256 = hashlib.sha256(raw_bytes).hexdigest()
     trail.log("Document Ingested & Cryptographic Hash Registered", "VERIFIED")
 
-    # 2. Quality Gate
+    # 2. Phase 4 Quality Gate
     quality = DocumentQualityGate.audit(img_cv)
     q_status = quality["metrics"].get("blur_status", "Acceptable")
     trail.log(f"Pre-Screening Quality Gate: {q_status} Sharpness", "PASS" if quality["passed"] else "FLAGGED")
 
-    # 3. Boundary Perspective Normalization
+    # 3. Phase 3 Boundary Perspective Normalization
     warped_cv = DocumentPerspectiveWarper.extract_and_warp(img_cv)
 
-    # 4. Deterministic Cryptographic Validators
+    # 4. Phase 8 & 9 Deterministic Cryptographic Validators
     clean_id = id_number.replace(" ", "").strip()
     dihedral_valid = False
     if clean_id and len(clean_id) == 12 and clean_id.isdigit():
@@ -91,7 +92,7 @@ async def execute_audit(
     if mrz_res["is_mrz_detected"]:
         trail.log(f"ICAO Doc 9303 MRZ Checksum: {'PASS' if mrz_res['all_checks_passed'] else 'FAIL'}", "PASS" if mrz_res['all_checks_passed'] else "FLAGGED")
 
-    # 5. Multi-Pass QR Decoder & Masker
+    # 5. Phase 10 Multi-Pass QR Decoder & Masker
     qr_res = MultiPassQREngine.inspect_and_mask(warped_cv)
 
     # 6. Multi-Modal Document Classification
@@ -103,18 +104,20 @@ async def execute_audit(
     trail.log(f"Biometric Portrait: {'Extracted' if face_res['face_detected'] else 'No Face Detected'} (Swap Gradient: {face_res['swap_score']})",
               "FLAGGED" if face_res["anomaly_detected"] else "PASS")
 
-    # 8. Multi-Signal Spatial Scanners (ELA + Texture Flatness + Gradient Halos + Moiré + Metadata)
+    # 8. Multi-Signal Spatial Scanners (ELA + Texture Flatness + Gradient + Noise + Moiré + Metadata)
     ela_res = DifferentialELAAnalyzer.analyze(orig_pil, warped_cv, qr_bbox=qr_res.get("bbox"))
     texture_res = TextureFlatnessAnalyzer.detect_digital_strokes(warped_cv, qr_bbox=qr_res.get("bbox"))
     gradient_res = EdgeDiscontinuityAnalyzer.audit(warped_cv, qr_bbox=qr_res.get("bbox"))
+    noise_res = LocalNoiseAnalyzer.audit(warped_cv, qr_bbox=qr_res.get("bbox"))
     moire_res = OpticalMoireAnalyzer.inspect(warped_cv)
     meta_res = MetadataFootprintAnalyzer.inspect(orig_pil)
 
-    # 9. Spatial NMS Clustering (Aggregates ELA, Texture, Gradient, and Photo-Swap candidates)
+    # 9. Spatial NMS Clustering (Aggregates ELA, Texture, Gradient, Noise, and Photo-Swap candidates)
     raw_candidates = (
         ela_res.get("suspicious_zones", []) +
         texture_res.get("tamper_zones", []) +
-        gradient_res.get("tamper_zones", [])
+        gradient_res.get("tamper_zones", []) +
+        noise_res.get("tamper_zones", [])
     )
     if face_res.get("tamper_zone"):
         raw_candidates.append(face_res["tamper_zone"])
@@ -188,6 +191,7 @@ async def execute_audit(
             "ela_variance": ela_res.get("ela_variance", 0.0),
             "texture_variance": texture_res.get("mean_variance", 0.0),
             "gradient_mean": gradient_res.get("mean_gradient", 0.0),
+            "noise_variance": noise_res.get("global_variance", 0.0),
             "moire": moire_res
         },
         "metadata": meta_res,
