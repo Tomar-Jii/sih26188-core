@@ -148,7 +148,6 @@ class MultiSignalForensics:
 
     @staticmethod
     def extract_document_boundary_mask(img_cv: np.ndarray) -> np.ndarray:
-        """Extracts binary mask corresponding exclusively to the physical ID card polygon."""
         h, w = img_cv.shape[:2]
         gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY) if len(img_cv.shape) == 3 else img_cv
         blurred = cv2.bilateralFilter(gray, 7, 50, 50)
@@ -168,7 +167,6 @@ class MultiSignalForensics:
                 if (total_area * 0.25) < area < (total_area * 0.98):
                     peri = cv2.arcLength(c, True)
                     approx = cv2.approxPolyDP(c, 0.03 * peri, True)
-                    # Rectangular or rounded rectangle document shape
                     if len(approx) in [4, 5, 6, 7, 8]:
                         card_contour = approx
                         break
@@ -176,11 +174,9 @@ class MultiSignalForensics:
         mask = np.zeros((h, w), dtype=np.uint8)
         if card_contour is not None:
             cv2.drawContours(mask, [card_contour], -1, 255, -1)
-            # Inset mask slightly to eliminate physical card boundary edge artifacts
             inset_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
             mask = cv2.erode(mask, inset_kernel, iterations=1)
         else:
-            # Fallback: segment bright document surface from darker wooden desk
             _, thresh_doc = cv2.threshold(gray, 45, 255, cv2.THRESH_BINARY)
             mask = thresh_doc
 
@@ -198,9 +194,7 @@ class MultiSignalForensics:
         h_img, w_img = orig_gray.shape
         total_area = h_img * w_img
 
-        # -----------------------------------------------------------------
-        # STEP 1: Surface Boundary Isolation (Isolates Card from Table)
-        # -----------------------------------------------------------------
+        # Mask isolating card from table
         card_mask = MultiSignalForensics.extract_document_boundary_mask(img_cv)
 
         # -----------------------------------------------------------------
@@ -211,12 +205,9 @@ class MultiSignalForensics:
         max_diff = max([ex[1] for ex in extrema])
         scale = 255.0 / max_diff if max_diff != 0 else 1.0
         ela_enhanced = ImageEnhance.Brightness(ela_im).enhance(scale)
-        ela_cv = cv2.cvtColor(np.array(ela_enhanced), cv2.COLOR_RGB2BGR)
-
         diff_np = np.array(ela_im).astype(np.float32)
         channel_max = np.max(diff_np, axis=2).astype(np.uint8)
 
-        # Compute baseline solely on card surface
         card_pixels = channel_max[card_mask > 0]
         if card_pixels.size > 200:
             mean_val = float(np.mean(card_pixels))
@@ -224,31 +215,48 @@ class MultiSignalForensics:
         else:
             mean_val, std_val = float(np.mean(channel_max)), float(np.std(channel_max))
 
-        dynamic_thresh = max(42, min(int(mean_val + (1.65 * std_val)), 68))
+        dynamic_thresh = max(44, min(int(mean_val + (1.60 * std_val)), 66))
         blur_ela = cv2.GaussianBlur(channel_max, (3, 3), 0)
         _, thresh_ela = cv2.threshold(blur_ela, dynamic_thresh, 255, cv2.THRESH_BINARY)
         thresh_ela = cv2.bitwise_and(thresh_ela, thresh_ela, mask=card_mask)
 
         # -----------------------------------------------------------------
-        # SIGNAL 2: Digital Pen & Markup Flatness Detector
-        # (Catches hand-drawn solid strokes, ink touchups, hair edits)
+        # SIGNAL 2: CIE-Lab Chromatic Inconsistency Audit (Delta E)
+        # (Detects digital pigment vs physical printing ink spectrum)
+        # -----------------------------------------------------------------
+        lab = cv2.cvtColor(img_cv, cv2.COLOR_BGR2LAB)
+        _, a_chan, b_chan = cv2.split(lab)
+        
+        # Calculate local color deviation from natural paper reflection
+        chroma_delta = np.sqrt(
+            (a_chan.astype(np.float32) - 128.0)**2 + 
+            (b_chan.astype(np.float32) - 128.0)**2
+        )
+        chroma_blur = cv2.GaussianBlur(chroma_delta, (5, 5), 0)
+        chroma_norm = cv2.normalize(chroma_blur, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+
+        # High chrominance outliers on dark marks indicate artificial color overlays
+        is_dark_mark = orig_gray < 70
+        _, thresh_chroma = cv2.threshold(chroma_norm, 160, 255, cv2.THRESH_BINARY)
+        chroma_anomalies = np.logical_and(is_dark_mark, thresh_chroma > 0).astype(np.uint8) * 255
+
+        # -----------------------------------------------------------------
+        # SIGNAL 3: Digital Brush Flatness (Zero-Grain Audit)
         # -----------------------------------------------------------------
         gray_f = orig_gray.astype(np.float32)
         local_mean = cv2.blur(gray_f, (5, 5))
         local_sq = cv2.blur(gray_f ** 2, (5, 5))
         local_std = np.sqrt(np.maximum(local_sq - (local_mean ** 2), 0.0))
 
-        # Real printed ink contains camera sensor shot noise (std > 5.5).
-        # Mobile markup brush tools produce near-uniform pixel values (std < 3.8).
-        is_dark_mark = orig_gray < 70
         is_unnaturally_flat = local_std < 3.8
         digital_stroke_mask = np.logical_and(is_dark_mark, is_unnaturally_flat).astype(np.uint8) * 255
-        digital_stroke_mask = cv2.bitwise_and(digital_stroke_mask, digital_stroke_mask, mask=card_mask)
 
         # -----------------------------------------------------------------
-        # Fusion & Morphological Extraction
+        # Multi-Signal Spatial Fusion
         # -----------------------------------------------------------------
-        combined_mask = cv2.bitwise_or(thresh_ela, digital_stroke_mask)
+        combined_anomalies = cv2.bitwise_or(thresh_ela, digital_stroke_mask)
+        combined_anomalies = cv2.bitwise_or(combined_anomalies, chroma_anomalies)
+        combined_mask = cv2.bitwise_and(combined_anomalies, combined_anomalies, mask=card_mask)
 
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (4, 4))
         closed = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel)
@@ -261,17 +269,17 @@ class MultiSignalForensics:
 
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            # Area bounds: Captures small slashes (20px) up to sizable blocks
-            if 20 < area < (total_area * 0.12):
+            # Retain small stroke segments (>18px) and bound upper ceiling
+            if 18 < area < (total_area * 0.12):
                 x, y, w, h = cv2.boundingRect(cnt)
                 aspect = float(w) / max(h, 1)
 
-                # Machine-printed dividing rules span >60% of card width with height < 6px
+                # Machine-printed divider lines: long (>60% card width) and thin (<6px)
                 if w > (w_img * 0.60) and h <= 5:
                     continue
 
-                # Filter uniform QR code matrix if present
-                if area > 2400 and 0.85 < aspect < 1.18 and x > (w_img * 0.40):
+                # QR code checkerboard suppression
+                if area > 2400 and 0.82 < aspect < 1.20 and x > (w_img * 0.40):
                     continue
 
                 cv2.rectangle(annotated_cv, (x, y), (x + w, y + h), (0, 0, 255), 2)
@@ -281,7 +289,7 @@ class MultiSignalForensics:
                 suspicious_regions.append({
                     "region_id": f"REG_{box_count + 1}",
                     "bbox": [int(x), int(y), int(w), int(h)],
-                    "anomaly_score": 0.88
+                    "anomaly_score": 0.91
                 })
                 box_count += 1
 
