@@ -17,8 +17,6 @@ class ICAO9303Validator:
                 val = int(char)
             elif 'A' <= char <= 'Z':
                 val = ord(char) - 55
-            elif char == '<':
-                val = 0
             else:
                 val = 0
             total += val * cls.WEIGHTS[i % 3]
@@ -32,38 +30,37 @@ class ICAO9303Validator:
         lines = [line.strip().replace(" ", "").upper() for line in raw_text.splitlines() if len(line.strip()) >= 30]
         mrz_lines = [l for l in lines if re.match(r'^[A-Z0-9<]+$', l)]
         
-        if len(mrz_lines) >= 2 and len(mrz_lines[0]) in [36, 44]:
+        if len(mrz_lines) >= 2 and len(mrz_lines[0]) == 44 and len(mrz_lines[1]) == 44:
             l1, l2 = mrz_lines[0], mrz_lines[1]
-            if len(l1) == 44 and len(l2) == 44:
-                doc_num = l2[0:9]
-                doc_num_check = l2[9]
-                dob = l2[13:19]
-                dob_check = l2[19]
-                expiry = l2[21:27]
-                expiry_check = l2[27]
-                composite = l2[0:10] + l2[13:20] + l2[21:43]
-                composite_check = l2[43]
+            doc_num = l2[0:9]
+            doc_num_check = l2[9]
+            dob = l2[13:19]
+            dob_check = l2[19]
+            expiry = l2[21:27]
+            expiry_check = l2[27]
+            composite = l2[0:10] + l2[13:20] + l2[21:43]
+            composite_check = l2[43]
 
-                doc_valid = str(cls.compute_check_digit(doc_num)) == doc_num_check
-                dob_valid = str(cls.compute_check_digit(dob)) == dob_check
-                expiry_valid = str(cls.compute_check_digit(expiry)) == expiry_check
-                comp_valid = str(cls.compute_check_digit(composite)) == composite_check
+            doc_valid = str(cls.compute_check_digit(doc_num)) == doc_num_check
+            dob_valid = str(cls.compute_check_digit(dob)) == dob_check
+            expiry_valid = str(cls.compute_check_digit(expiry)) == expiry_check
+            comp_valid = str(cls.compute_check_digit(composite)) == composite_check
 
-                return {
-                    "is_mrz_detected": True,
-                    "type": "TD3_PASSPORT",
-                    "doc_number": doc_num.replace("<", ""),
-                    "dob": dob,
-                    "expiry": expiry,
-                    "nationality": l2[10:13].replace("<", ""),
-                    "checks": {
-                        "doc_number": "PASS" if doc_valid else "FAIL",
-                        "dob": "PASS" if dob_valid else "FAIL",
-                        "expiry": "PASS" if expiry_valid else "FAIL",
-                        "composite": "PASS" if comp_valid else "FAIL"
-                    },
-                    "all_checks_passed": all([doc_valid, dob_valid, expiry_valid, comp_valid])
-                }
+            return {
+                "is_mrz_detected": True,
+                "type": "TD3_PASSPORT",
+                "doc_number": doc_num.replace("<", ""),
+                "dob": dob,
+                "expiry": expiry,
+                "nationality": l2[10:13].replace("<", ""),
+                "checks": {
+                    "doc_number": "PASS" if doc_valid else "FAIL",
+                    "dob": "PASS" if dob_valid else "FAIL",
+                    "expiry": "PASS" if expiry_valid else "FAIL",
+                    "composite": "PASS" if comp_valid else "FAIL"
+                },
+                "all_checks_passed": bool(doc_valid and dob_valid and expiry_valid and comp_valid)
+            }
 
         return {"is_mrz_detected": False, "checks": {}, "all_checks_passed": False}
 
@@ -71,22 +68,35 @@ class ICAO9303Validator:
 class DocumentQualityEngine:
     @staticmethod
     def assess_quality(img_cv: np.ndarray) -> dict:
+        if img_cv is None or img_cv.size == 0:
+            return {
+                "passed": False,
+                "abstain_reason": "Zero-dimension image buffer",
+                "metrics": {"sharpness_laplacian": 0.0, "blur_status": "Unusable", "glare_status": "Unknown", "resolution": "0x0"}
+            }
+
         h, w = img_cv.shape[:2]
         gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY) if len(img_cv.shape) == 3 else img_cv
 
-        # Relaxed Laplacian Variance for normal mobile phone camera captures
-        lap_var = cv2.Laplacian(gray, cv2.CV_64F).var()
-        blur_status = "Good" if lap_var > 60.0 else ("Acceptable" if lap_var > 18.0 else "Poor (Blurry)")
+        lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        blur_status = "Good" if lap_var > 60.0 else ("Acceptable" if lap_var > 14.0 else "Poor (Blurry)")
 
         hist = cv2.calcHist([gray], [0], None, [256], [0, 256])
-        total_pixels = h * w
+        total_pixels = max(h * w, 1)
         pure_white_ratio = float(np.sum(hist[250:]) / total_pixels)
-        glare_status = "High (Glare Detected)" if pure_white_ratio > 0.12 else "Normal"
+        glare_status = "High (Glare Detected)" if pure_white_ratio > 0.18 else "Normal"
 
-        passed = bool(lap_var > 18.0 and pure_white_ratio <= 0.20)
+        passed = bool(lap_var > 14.0 and pure_white_ratio <= 0.25 and w >= 150 and h >= 150)
+        abstain_reason = None
+        if not passed:
+            reasons = []
+            if lap_var <= 14.0: reasons.append("Severe Motion Blur")
+            if pure_white_ratio > 0.25: reasons.append("Severe Glare")
+            abstain_reason = "; ".join(reasons)
 
         return {
             "passed": passed,
+            "abstain_reason": abstain_reason,
             "metrics": {
                 "sharpness_laplacian": round(lap_var, 1),
                 "blur_status": blur_status,
@@ -105,27 +115,23 @@ class MultiSignalForensics:
     def audit_exif_metadata(image: Image.Image) -> dict:
         suspicious_tags = []
         editing_tools = ["photoshop", "gimp", "canva", "picsart", "coreldraw", "lightroom", "snapseed"]
-        info = image.getexif()
-        raw_meta = {}
-        if info:
-            for tag_id, value in info.items():
-                tag_name = TAGS.get(tag_id, str(tag_id))
-                val_str = str(value).lower()
-                raw_meta[tag_name] = str(value)[:80]
-                for tool in editing_tools:
-                    if tool in val_str:
-                        suspicious_tags.append(f"Editor footprint detected: {tool.upper()}")
-        return {"has_exif": len(raw_meta) > 0, "software_traces": suspicious_tags}
+        try:
+            info = image.getexif()
+            if info:
+                for tag_id, value in info.items():
+                    tag_name = TAGS.get(tag_id, str(tag_id))
+                    val_str = str(value).lower()
+                    for tool in editing_tools:
+                        if tool in val_str:
+                            suspicious_tags.append(f"Editor footprint in {tag_name}: {tool.upper()}")
+        except Exception:
+            pass
+        return {"has_exif": bool(suspicious_tags), "software_traces": suspicious_tags}
 
     @staticmethod
     def analyze_moire_frequency(img_cv: np.ndarray) -> dict:
         try:
-            if len(img_cv.shape) == 2:
-                gray = img_cv
-            elif len(img_cv.shape) == 3 and img_cv.shape[2] == 4:
-                gray = cv2.cvtColor(img_cv, cv2.COLOR_BGRA2GRAY)
-            else:
-                gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+            gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY) if len(img_cv.shape) == 3 else img_cv
             gray = cv2.resize(gray, (512, 512))
             dft = np.fft.fft2(gray)
             dft_shift = np.fft.fftshift(dft)
@@ -142,20 +148,13 @@ class MultiSignalForensics:
 
     @staticmethod
     def localize_tampering_multisignal(orig_img: Image.Image, img_cv: np.ndarray) -> dict:
-        if len(img_cv.shape) == 2:
-            annotated_cv = cv2.cvtColor(img_cv, cv2.COLOR_GRAY2BGR)
-        elif len(img_cv.shape) == 3 and img_cv.shape[2] == 4:
-            annotated_cv = cv2.cvtColor(img_cv, cv2.COLOR_BGRA2BGR)
-        else:
-            annotated_cv = img_cv.copy()
-
-        safe_orig = orig_img.convert("RGB")
+        rgb_pil = orig_img.convert("RGB")
         buffered = io.BytesIO()
-        safe_orig.save(buffered, format="JPEG", quality=90)
+        rgb_pil.save(buffered, format="JPEG", quality=90)
         buffered.seek(0)
         resaved = Image.open(buffered)
 
-        ela_im = ImageChops.difference(safe_orig, resaved.convert("RGB"))
+        ela_im = ImageChops.difference(rgb_pil, resaved)
         extrema = ela_im.getextrema()
         max_diff = max([ex[1] for ex in extrema])
         scale = 255.0 / max_diff if max_diff != 0 else 1.0
@@ -163,53 +162,68 @@ class MultiSignalForensics:
         ela_cv = cv2.cvtColor(np.array(ela_enhanced), cv2.COLOR_RGB2BGR)
         gray_ela = cv2.cvtColor(ela_cv, cv2.COLOR_BGR2GRAY)
 
-        mean_val = float(np.mean(gray_ela))
-        std_val = float(np.std(gray_ela))
-        dynamic_thresh = max(45, min(int(mean_val + (1.8 * std_val)), 65))
+        # 1. Background Suppression: Calculate stats ONLY on bright document pixels (ignore black hands/room)
+        orig_gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY) if len(img_cv.shape) == 3 else img_cv
+        doc_mask = orig_gray > 45  # Mask out dark background
+        
+        valid_ela_pixels = gray_ela[doc_mask] if np.sum(doc_mask) > 500 else gray_ela
+        mean_val = float(np.mean(valid_ela_pixels))
+        std_val = float(np.std(valid_ela_pixels))
 
-        h_img, w_img = gray_ela.shape
-        total_area = h_img * w_img
-        if total_area <= 0:
-            return {
-                "ela_enhanced": ela_enhanced,
-                "annotated_cv": annotated_cv,
-                "ela_variance": round(std_val, 2),
-                "tamper_regions": [],
-                "box_count": 0
-            }
+        # Calibrated dynamic threshold: floor raised to 68 to prevent normal black text from triggering
+        dynamic_thresh = max(68, min(int(mean_val + (2.4 * std_val)), 92))
 
-        blur_kx = 5 if w_img >= 5 else 3
-        blur_ky = 5 if h_img >= 5 else 3
-        blur_ela = cv2.GaussianBlur(gray_ela, (blur_kx, blur_ky), 0)
+        blur_ela = cv2.GaussianBlur(gray_ela, (5, 5), 0)
         _, thresh = cv2.threshold(blur_ela, dynamic_thresh, 255, cv2.THRESH_BINARY)
-        kernel_w = 7 if w_img >= 7 else 3
-        kernel_h = 5 if h_img >= 5 else 3
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_w, kernel_h))
+
+        # 2. QR Code Suppression: Detect QR region and mask it out completely
+        try:
+            qr_detector = cv2.QRCodeDetector()
+            _, qr_pts = qr_detector.detect(img_cv)
+            if qr_pts is not None:
+                pts = qr_pts[0].astype(int)
+                x_qr, y_qr, w_qr, h_qr = cv2.boundingRect(pts)
+                pad = 15
+                cv2.rectangle(thresh, 
+                              (max(0, x_qr - pad), max(0, y_qr - pad)), 
+                              (min(thresh.shape[1], x_qr + w_qr + pad), min(thresh.shape[0], y_qr + h_qr + pad)), 
+                              0, -1)
+        except Exception:
+            pass
+
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 5))
         closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
 
         contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        annotated_cv = img_cv.copy() if len(img_cv.shape) == 3 else cv2.cvtColor(img_cv, cv2.COLOR_GRAY2BGR)
+        h_img, w_img = gray_ela.shape
+        total_area = h_img * w_img
 
         suspicious_regions = []
         box_count = 0
-        min_area = max(4, int(total_area * 0.0002))
-        max_area = max(min_area + 1, int(total_area * 0.14))
 
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            if min_area < area < max_area:
+            if 110 < area < (total_area * 0.12):
                 x, y, w, h = cv2.boundingRect(cnt)
                 aspect = float(w) / max(h, 1)
-                if area > 2600 and 0.82 < aspect < 1.18 and x > (w_img * 0.40):
+
+                # Filter out thin horizontal lines (e.g. red underline)
+                if aspect > 4.5 and h < 14:
+                    continue
+
+                # Filter out QR code squares even if corner detection missed
+                if area > 1800 and 0.80 < aspect < 1.25 and x > (w_img * 0.40):
                     continue
 
                 cv2.rectangle(annotated_cv, (x, y), (x + w, y + h), (0, 0, 255), 2)
                 cv2.putText(annotated_cv, "TAMPER", (x, max(y - 4, 14)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 2, cv2.LINE_AA)
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1, cv2.LINE_AA)
 
                 suspicious_regions.append({
                     "region_id": f"REG_{box_count + 1}",
-                    "bbox": [x, y, w, h],
-                    "anomaly_score": 0.85
+                    "bbox": [int(x), int(y), int(w), int(h)],
+                    "anomaly_score": 0.82
                 })
                 box_count += 1
 
@@ -229,66 +243,49 @@ class RiskFusionEngine:
         explanations = []
         boxes = forensics.get("box_count", 0)
 
-        # Smart Gating: Only abstain if quality failed AND there are no detected tamper boxes
-        if not quality["passed"] and boxes == 0:
+        if not quality.get("passed", False) and boxes == 0:
             return {
                 "verdict": "ABSTAIN: INSUFFICIENT EVIDENCE",
                 "risk_score": 0,
                 "risk_level": "UNDETERMINED",
                 "confidence": 0.25,
-                "breakdown": ["Analysis halted: Document image sharpness is too low to assess authenticity."],
-                "recommendation": "RE-ACQUIRE DOCUMENT UNDER PROPER ILLUMINATION WITHOUT BLUR"
+                "breakdown": [f"Screening halted: {quality.get('abstain_reason', 'Low quality buffer')}"],
+                "recommendation": "RE-ACQUIRE DOCUMENT UNDER PROPER ILLUMINATION WITHOUT MOTION BLUR"
             }
 
-        # 1. Forensic Tamper Detection Signal
         if boxes > 0:
-            assigned = min(50 + (boxes * 15), 75)
+            assigned = min(45 + (boxes * 15), 75)
             risk_accum += assigned
             explanations.append(f"+{assigned} Spatial pixel tampering localized in {boxes} distinct region(s).")
         elif forensics.get("ela_variance", 0) > 30.0:
             risk_accum += 10
             explanations.append("+10 Compression variance indicates potential re-saving artifacts.")
 
-        # 2. Checksum / MRZ
         mrz = deterministic.get("mrz", {})
         if mrz.get("is_mrz_detected") and not mrz.get("all_checks_passed"):
             risk_accum += 30
-            explanations.append("+30 ICAO 9303 checksum parity mismatch.")
+            explanations.append("+30 ICAO 9303 check digit verification mismatch.")
 
-        # 3. Optical Moiré Screen Spoof
         moire = forensics.get("moire", {})
         if moire.get("is_screen_recapture"):
-            risk_accum += 30
-            explanations.append(f"+30 Optical screen frequency detected (PAPR: {moire.get('papr_score')}).")
+            risk_accum += 25
+            explanations.append(f"+25 Optical screen grid frequencies detected (PAPR: {moire.get('papr_score')}).")
 
-        # 4. Metadata
         traces = metadata.get("software_traces", [])
         if traces:
             risk_accum += 20
-            explanations.append(f"+20 Editing software traces detected in EXIF: {traces[0]}")
+            explanations.append(f"+20 Image editing software signature detected in metadata.")
 
         final_risk = int(min(max(risk_accum, 4), 98))
-
-        if final_risk >= 50:
-            level = "HIGH"
-            verdict = "SUSPICIOUS INDICATORS DETECTED"
-            rec = "MANDATORY INVESTIGATOR FORENSIC REVIEW"
-        elif final_risk >= 25:
-            level = "MEDIUM"
-            verdict = "ANOMALIES DETECTED"
-            rec = "SECONDARY SCRUTINY RECOMMENDED"
-        else:
-            level = "LOW"
-            verdict = "NO STRONG ANOMALIES DETECTED"
-            rec = "PROCEED WITH STANDARD PROCESSING"
-
-        confidence_score = 0.88 if quality["passed"] else 0.72
+        level = "HIGH" if final_risk >= 50 else ("MEDIUM" if final_risk >= 25 else "LOW")
+        verdict = "SUSPICIOUS / POTENTIAL FORGERY" if final_risk >= 50 else ("ANOMALIES DETECTED" if final_risk >= 25 else "AUTHENTIC / UNALTERED")
+        rec = "MANDATORY INVESTIGATOR REVIEW" if final_risk >= 50 else ("SECONDARY SCREENING" if final_risk >= 25 else "PROCEED WITH STANDARD PROCESSING")
 
         return {
             "verdict": verdict,
             "risk_score": final_risk,
             "risk_level": level,
-            "confidence": confidence_score,
-            "breakdown": explanations if explanations else ["All structural, cryptographic, and spatial signals within normal tolerances."],
+            "confidence": 0.88 if quality.get("passed", False) else 0.65,
+            "breakdown": explanations if explanations else ["All structural, cryptographic, and spatial signals within normal baseline tolerances."],
             "recommendation": rec
         }
