@@ -65,18 +65,16 @@ async def audit_document(
                     else:
                         verhoeff_status = "FAILED (Mathematical Forgery)"
                         risk_score += 55
-                        flags.append(f"Aadhaar Number [{clean_id}] failed Verhoeff Checksum: Digit sequence is fabricated.")
+                        flags.append("Specified ID number failed Verhoeff Checksum: Sequence is mathematically forged.")
                 else:
                     verhoeff_status = "INVALID FORMAT"
                     risk_score += 15
-                    flags.append("Specified ID number format does not match 12-digit standard.")
+                    flags.append("Specified ID number does not match 12-digit format.")
 
-            if tamper_boxes >= 3:
-                risk_score += min(tamper_boxes * 15, 60)
-                flags.append(f"Pixel Splicing Confirmed: {tamper_boxes} distinct modified patches detected.")
-            elif tamper_boxes in [1, 2]:
-                risk_score += 25
-                flags.append(f"Localized Anomaly: {tamper_boxes} area(s) show non-uniform compression difference.")
+            # Threat Scoring for Localized Tampering
+            if tamper_boxes >= 1:
+                risk_score += min(tamper_boxes * 25, 65)
+                flags.append(f"Pixel Splicing/Scribble Localized: {tamper_boxes} anomalous region(s) framed in RED.")
 
             if exif_results["software_traces"]:
                 risk_score += 40
@@ -84,7 +82,7 @@ async def audit_document(
 
             if moire_results["is_screen_recapture"]:
                 risk_score += 35
-                flags.append(f"Screen Optical Moiré detected (PAPR: {moire_results['papr_score']}) - Recaptured from electronic display.")
+                flags.append(f"Screen Optical Moiré detected (Score: {moire_results['papr_score']}) - Recaptured from screen.")
 
             if not qr_results["detected"]:
                 flags.append("Document lacks readable QR barcode.")

@@ -62,13 +62,12 @@ class DocumentForensicSuite:
         if is_mobile_screenshot:
             reason = "Mobile UI Screenshot Aspect Ratio (Not an ID card)"
         elif is_dark_screen:
-            reason = "Image too dark to process document surface"
+            reason = "Dark mode canvas / Obscured lighting"
 
         return {"is_valid_id": is_valid, "reason": reason}
 
     @staticmethod
     def extract_face_portrait(img_cv: np.ndarray) -> np.ndarray:
-        """Finds and crops the cardholder's face for biometric thumbnailing"""
         try:
             gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
             face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
@@ -130,13 +129,15 @@ class DocumentForensicSuite:
         ela_cv = cv2.cvtColor(np.array(ela_enhanced), cv2.COLOR_RGB2BGR)
         gray_ela = cv2.cvtColor(ela_cv, cv2.COLOR_BGR2GRAY)
         
+        # SENSITIVE RE-CALIBRATION: Dynamically clamped between 45 and 62
         mean_val = np.mean(gray_ela)
         std_val = np.std(gray_ela)
-        adaptive_thresh_val = max(int(mean_val + (2.7 * std_val)), 75)
+        calculated_thresh = int(mean_val + (1.75 * std_val))
+        adaptive_thresh_val = max(45, min(calculated_thresh, 62))
         
-        blur = cv2.GaussianBlur(gray_ela, (7, 7), 0)
+        blur = cv2.GaussianBlur(gray_ela, (5, 5), 0)
         _, thresh = cv2.threshold(blur, adaptive_thresh_val, 255, cv2.THRESH_BINARY)
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 9))
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 5))
         closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
         
         contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -148,13 +149,16 @@ class DocumentForensicSuite:
         
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            if 300 < area < (total_img_area * 0.12):
+            # Area floor lowered to 70px to catch single-character strokes and scribbles
+            if 70 < area < (total_img_area * 0.15):
                 x, y, w, h = cv2.boundingRect(cnt)
-                # Ignore regular square QR code bounding box
-                if area > 2400 and 0.82 < (w / float(h)) < 1.18 and x > (img_w * 0.40):
+                
+                # Exclude square QR pattern on right side
+                if area > 2800 and 0.82 < (w / float(h)) < 1.18 and x > (img_w * 0.45):
                     continue
+                    
                 cv2.rectangle(annotated_cv, (x, y), (x + w, y + h), (0, 0, 255), 2)
-                cv2.putText(annotated_cv, "TAMPER", (x, max(y - 5, 15)),
+                cv2.putText(annotated_cv, "TAMPER", (x, max(y - 4, 14)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 0, 255), 2, cv2.LINE_AA)
                 tamper_boxes += 1
                 
@@ -162,39 +166,33 @@ class DocumentForensicSuite:
 
     @staticmethod
     def audit_qr_code(img_cv: np.ndarray) -> dict:
-        """Multi-Pass QR Detector (Direct + CLAHE + Square Texture Verification)"""
         try:
             detector = cv2.QRCodeDetector()
-            # Pass 1: Direct
+            # Pass 1: Raw
             data, points, _ = detector.detectAndDecode(img_cv)
             if points is not None:
                 return {"detected": True, "status": "Decoded Successfully"}
 
-            # Pass 2: Contrast Enhanced (for dark cards like Dhapu Bai)
+            # Pass 2: CLAHE Contrast
             gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
-            clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
             enhanced = clahe.apply(gray)
             _, points, _ = detector.detectAndDecode(enhanced)
             if points is not None:
                 return {"detected": True, "status": "Decoded (CLAHE Enhanced)"}
 
-            # Pass 3: Morphological QR Finder Pattern Detection (Texture check)
+            # Pass 3: Otsu Adaptive Binarization (Handles flash reflection)
+            _, otsu = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            _, points, _ = detector.detectAndDecode(otsu)
+            if points is not None:
+                return {"detected": True, "status": "Decoded (Otsu Binarized)"}
+
+            # Pass 4: Finder Matrix Verification
             edges = cv2.Canny(gray, 100, 200)
             contours, _ = cv2.findContours(edges, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-            qr_like_patterns = 0
-            for c in contours:
-                area = cv2.contourArea(c)
-                if 200 < area < 15000:
-                    peri = cv2.arcLength(c, True)
-                    approx = cv2.approxPolyDP(c, 0.04 * peri, True)
-                    if len(approx) == 4:
-                        x, y, w, h = cv2.boundingRect(approx)
-                        ratio = float(w) / h
-                        if 0.85 < ratio < 1.15:
-                            qr_like_patterns += 1
-            
-            if qr_like_patterns >= 3:
-                return {"detected": True, "status": "QR Signature Verified (Finder Matrix)"}
+            qr_like = sum(1 for c in contours if 150 < cv2.contourArea(c) < 12000 and 0.8 < (cv2.boundingRect(c)[2] / float(cv2.boundingRect(c)[3])) < 1.25)
+            if qr_like >= 3:
+                return {"detected": True, "status": "QR Signature Verified"}
         except Exception:
             pass
         return {"detected": False, "status": "No readable QR code found"}
