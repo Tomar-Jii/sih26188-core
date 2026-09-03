@@ -49,27 +49,43 @@
       <div class="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-slate-800/80">
         <div>
           <h2 class="text-sm font-bold text-white uppercase tracking-wider">Document Ingestion & Multi-Signal Pre-Screening</h2>
-          <p class="text-xs text-slate-400">Upload identity document or enter optional verification tokens.</p>
+          <p class="text-xs text-slate-400">Upload identity document and optional live selfie for 1:1 facial biometric matching.</p>
         </div>
         <div id="doc-class-badge" class="hidden text-xs px-3 py-1 rounded-lg bg-cyan-950/60 border border-cyan-800/60 text-cyan-300 font-bold mono"></div>
       </div>
 
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+        <!-- 1. Document File Upload -->
         <div class="md:col-span-2">
-          <label for="doc-upload" class="border-2 border-dashed border-slate-700 hover:border-cyan-500/60 rounded-xl p-4 flex items-center justify-center gap-3 cursor-pointer transition bg-slate-950/40">
+          <label for="doc-upload" class="border-2 border-dashed border-slate-700 hover:border-cyan-500/60 rounded-xl p-3.5 flex items-center justify-center gap-3 cursor-pointer transition bg-slate-950/40">
             <input type="file" id="doc-upload" class="hidden" accept="image/*" />
             <div class="w-8 h-8 rounded-lg bg-cyan-500/10 text-cyan-400 flex items-center justify-center">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
             </div>
-            <div class="text-left">
-              <span id="file-name-label" class="text-xs font-semibold text-slate-300 block">Select Document Image</span>
-              <span class="text-[10px] text-slate-500">Passports, Aadhaar, PAN Cards, National ID Permits</span>
+            <div class="text-left overflow-hidden">
+              <span id="file-name-label" class="text-xs font-semibold text-slate-300 block truncate">Select Document Image</span>
+              <span class="text-[10px] text-slate-500 block">Passports, Aadhaar, PAN Cards, National ID Permits</span>
             </div>
           </label>
         </div>
 
+        <!-- 2. NEW: Live Selfie / Face Upload -->
+        <div>
+          <label for="selfie-upload" class="border-2 border-dashed border-slate-700 hover:border-blue-500/60 rounded-xl p-3.5 flex items-center justify-center gap-3 cursor-pointer transition bg-slate-950/40">
+            <input type="file" id="selfie-upload" class="hidden" accept="image/*" capture="user" />
+            <div class="w-8 h-8 rounded-lg bg-blue-500/10 text-blue-400 flex items-center justify-center">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/><circle cx="12" cy="13" r="4"/></svg>
+            </div>
+            <div class="text-left overflow-hidden">
+              <span id="selfie-name-label" class="text-xs font-semibold text-slate-300 block truncate">Live Selfie (Optional)</span>
+              <span class="text-[10px] text-slate-500 block">1:1 Biometric Face Match</span>
+            </div>
+          </label>
+        </div>
+
+        <!-- 3. Form Inputs & Audit Button -->
         <div class="space-y-2">
-          <input type="text" id="id-input" placeholder="ID Number (e.g. 12-digit Aadhaar for Dihedral D5)" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-cyan-500 mono" />
+          <input type="text" id="id-input" placeholder="ID Number (e.g. 12-digit UID for Dihedral D5)" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-cyan-500 mono" />
           <input type="text" id="mrz-input" placeholder="MRZ String (Optional ICAO Doc 9303)" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-cyan-500 mono" />
           <button id="run-audit-btn" class="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold py-2 rounded-xl text-xs uppercase tracking-wider shadow-lg shadow-cyan-500/20 transition disabled:opacity-40" disabled>
             Execute Forensic Inspection
@@ -125,8 +141,8 @@
 
           <div class="flex items-center justify-between p-2 rounded-lg bg-slate-950/60 border border-slate-800/80">
             <div>
-              <div class="text-xs font-semibold text-slate-200">3. Spatial Pixel Splicing</div>
-              <div class="text-[9px] text-slate-400">Adaptive Residual <span class="mono text-cyan-400">(ELA + Texture)</span></div>
+              <div class="text-xs font-semibold text-slate-200">3. Spatial Defacement / Tamper</div>
+              <div class="text-[9px] text-slate-400">Stroke Texture & Digit Occlusion</div>
             </div>
             <span id="chk-tamper" class="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400">Standby</span>
           </div>
@@ -141,7 +157,15 @@
 
           <div class="flex items-center justify-between p-2 rounded-lg bg-slate-950/60 border border-slate-800/80">
             <div>
-              <div class="text-xs font-semibold text-slate-200">5. Metadata Footprints</div>
+              <div class="text-xs font-semibold text-slate-200">5. 1:1 Live Selfie Match</div>
+              <div class="text-[9px] text-slate-400">Camera vs Card Biometrics</div>
+            </div>
+            <span id="chk-live-face" class="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400">Optional</span>
+          </div>
+
+          <div class="flex items-center justify-between p-2 rounded-lg bg-slate-950/60 border border-slate-800/80">
+            <div>
+              <div class="text-xs font-semibold text-slate-200">6. Metadata Footprints</div>
               <div class="text-[9px] text-slate-400">EXIF Software Editor Trace</div>
             </div>
             <span id="chk-exif" class="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400">Standby</span>
@@ -233,10 +257,13 @@
   <script>
     let activeData = null;
     let selectedFile = null;
+    let selectedSelfie = null;
 
     const uploader = document.getElementById('doc-upload');
+    const selfieUploader = document.getElementById('selfie-upload');
     const runBtn = document.getElementById('run-audit-btn');
     const fileLabel = document.getElementById('file-name-label');
+    const selfieLabel = document.getElementById('selfie-name-label');
     const splitRange = document.getElementById('split-range');
     const viewOverlayWrap = document.getElementById('view-overlay-wrap');
     const viewOverlay = document.getElementById('view-overlay');
@@ -252,6 +279,13 @@
       if (selectedFile) {
         fileLabel.innerText = "Loaded: " + selectedFile.name;
         runBtn.disabled = false;
+      }
+    };
+
+    selfieUploader.onchange = (e) => {
+      selectedSelfie = e.target.files[0];
+      if (selectedSelfie) {
+        selfieLabel.innerText = "Selfie: " + selectedSelfie.name;
       }
     };
 
@@ -280,6 +314,9 @@
 
       const formData = new FormData();
       formData.append("file", selectedFile);
+      if (selectedSelfie) {
+        formData.append("live_face", selectedSelfie);
+      }
       formData.append("id_number", document.getElementById('id-input').value);
       formData.append("mrz_raw_input", document.getElementById('mrz-input').value);
 
@@ -334,7 +371,7 @@
 
       if (res.classification?.document_type) {
         const clsBadge = document.getElementById('doc-class-badge');
-        clsBadge.innerText = res.classification.document_type + " (" + Math.round((res.classification.confidence || 0.9) * 100) + "%)";
+        clsBadge.innerText = res.classification.document_type;
         clsBadge.classList.remove('hidden');
       }
 
@@ -352,6 +389,16 @@
         const el = document.getElementById('chk-mrz');
         el.className = "text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400";
         el.innerText = "Not Provided";
+      }
+
+      // Live Selfie Checklist Indicator
+      const liveFaceData = res.deterministic?.live_face_verification;
+      const chkLive = document.getElementById('chk-live-face');
+      if (liveFaceData && liveFaceData.evaluated) {
+        setBadge('chk-live-face', liveFaceData.is_match, "Matched (" + Math.round(liveFaceData.similarity_score * 100) + "%)", "Mismatch");
+      } else {
+        chkLive.className = "text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400";
+        chkLive.innerText = "Not Provided";
       }
 
       setBadge('chk-exif', (res.metadata?.software_traces || []).length === 0, "Clean", "Editor Trace");

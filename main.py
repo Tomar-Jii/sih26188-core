@@ -53,6 +53,7 @@ async def serve_dashboard(request: Request):
 @app.post("/api/audit")
 async def execute_audit(
     file: UploadFile = File(...),
+    live_face: UploadFile = File(None),
     case_id: str = Form(None),
     id_number: str = Form(""),
     mrz_raw_input: str = Form("")
@@ -63,6 +64,16 @@ async def execute_audit(
         return JSONResponse(status_code=sec_err.status_code, content={"detail": sec_err.message})
     except Exception as exc:
         return JSONResponse(status_code=400, content={"detail": f"Stream ingestion fault: {str(exc)}"})
+
+    # Optional Live Face Capture Ingestion
+    live_cv = None
+    if live_face is not None and live_face.filename:
+        try:
+            live_bytes = await live_face.read()
+            if len(live_bytes) > 0:
+                live_cv = cv2.imdecode(np.frombuffer(live_bytes, np.uint8), cv2.IMREAD_COLOR)
+        except Exception:
+            live_cv = None
 
     try:
         trail = ForensicAuditTrail(case_id=case_id)
@@ -91,7 +102,7 @@ async def execute_audit(
         if mrz_res.get("is_mrz_detected"):
             trail.log(f"ICAO Doc 9303 MRZ Checksum: {'PASS' if mrz_res.get('all_checks_passed') else 'FAIL'}", "PASS" if mrz_res.get('all_checks_passed') else "FLAGGED")
 
-        # 4. Multi-Pass Secure QR Decoder (Collects all QR bboxes)
+        # 4. Multi-Pass Secure QR Decoder
         qr_res = MultiPassQREngine.inspect_and_mask(warped_cv)
         all_qr_boxes = qr_res.get("bboxes", [])
         if qr_res.get("bbox") and qr_res.get("bbox") not in all_qr_boxes:
@@ -107,7 +118,7 @@ async def execute_audit(
         # 6. Biometric Portrait Extraction
         face_res = BiometricPortraitAnalyzer.extract_and_audit(warped_cv)
 
-        # 7. Biometric Cross-Vector Portrait Match (Card Photo vs Signed QR Avatar)
+        # 7. Biometric Avatar Match (Card Photo vs Signed QR Avatar)
         face_match_res = {"evaluated": False, "match_status": "SKIPPED", "similarity_score": 1.0, "is_photo_swap": False}
         qr_payload = qr_res.get("payload")
         if qr_payload and isinstance(qr_payload, dict) and qr_payload.get("has_photo") and face_res.get("face_detected"):
@@ -116,7 +127,15 @@ async def execute_audit(
                 log_status = "PASS" if not face_match_res.get("is_photo_swap") else "FLAGGED"
                 trail.log(f"Biometric Avatar Audit: {face_match_res['match_status']} (Corr: {int(face_match_res['similarity_score']*100)}%)", log_status)
 
-        # 8. Forensic Defacement & Spatial Scanners (Passing all QR bounding boxes)
+        # 8. NEW: Live Selfie Face Match (Card Photo vs User Camera)
+        live_match_res = {"evaluated": False, "match_status": "SKIPPED", "similarity_score": 0.0, "is_match": True}
+        if live_cv is not None and face_res.get("face_detected"):
+            live_match_res = BiometricFaceMatcher.compare_live_face(face_res["face_crop"], live_cv)
+            if live_match_res.get("evaluated"):
+                log_status = "PASS" if live_match_res.get("is_match") else "FLAGGED"
+                trail.log(f"Live Face Verification: {live_match_res['match_status']} ({int(live_match_res['similarity_score']*100)}% Similarity)", log_status)
+
+        # 9. Forensic Defacement & Spatial Scanners
         texture_res = TextureFlatnessAnalyzer.detect_digital_strokes(warped_cv, qr_bbox=qr_res.get("bbox"), qr_bboxes=all_qr_boxes)
         ela_res = DifferentialELAAnalyzer.analyze(warped_pil, warped_cv, qr_bbox=qr_res.get("bbox"))
         gradient_res = EdgeDiscontinuityAnalyzer.audit(warped_cv, qr_bbox=qr_res.get("bbox"))
@@ -124,7 +143,7 @@ async def execute_audit(
         moire_res = OpticalMoireAnalyzer.inspect(warped_cv)
         meta_res = MetadataFootprintAnalyzer.inspect(orig_pil)
 
-        # 9. Spatial Region Merger (NMS)
+        # 10. Spatial Region Merger (NMS)
         raw_candidates = texture_res.get("tamper_zones", [])
         if face_match_res.get("is_photo_swap") and face_res.get("bbox"):
             fx, fy, fw, fh = face_res["bbox"]
@@ -138,18 +157,18 @@ async def execute_audit(
         box_count = len(merged_regions)
         trail.log(f"Spatial Fusion (NMS): {box_count} Defacement Zone(s) Isolated", "FLAGGED" if box_count > 0 else "PASS")
 
-        # 10. Cross-Field Verification
+        # 11. Cross-Field Verification
         cross_field_res = CrossFieldConsistencyEngine.audit_consistency(
             ocr_fields={"doc_number": clean_id},
             mrz_data=mrz_res,
             qr_data=qr_res
         )
 
-        # 11. Risk Engine Synthesis
+        # 12. Risk Engine Synthesis
         photo_swap_data = {
             "face_detected": face_res.get("face_detected", False),
-            "anomaly_detected": face_match_res.get("is_photo_swap", False),
-            "swap_score": 0.95 if face_match_res.get("is_photo_swap") else 0.05
+            "anomaly_detected": face_match_res.get("is_photo_swap", False) or (not live_match_res.get("is_match") if live_match_res.get("evaluated") else False),
+            "swap_score": 0.95 if (face_match_res.get("is_photo_swap") or (not live_match_res.get("is_match") if live_match_res.get("evaluated") else False)) else 0.05
         }
 
         risk_data = MultiSignalRiskEngine.compute_risk(
@@ -164,18 +183,18 @@ async def execute_audit(
             cross_field_result=cross_field_res
         )
 
-        # 12. Confidence & Abstention Gate
+        # 13. Confidence & Abstention Gate
         final_verdict = ConfidenceAbstentionGate.evaluate(quality, merged_regions, risk_data)
         trail.log(f"Risk Fusion Synthesis: Score {final_verdict['risk_score']}/100 ({final_verdict['risk_level']})", "COMPLETED")
 
-        # 13. Annotate Canvas
+        # 14. Annotate Canvas
         annotated = warped_cv.copy()
         for reg in merged_regions:
             x, y, w, h = reg["bbox"]
             cv2.rectangle(annotated, (x, y), (x + w, y + h), (0, 0, 255), 2)
             cv2.putText(annotated, "TAMPER", (x, max(y - 4, 12)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1)
 
-        # 14. BSA 65B Dossier Builder
+        # 15. BSA 65B Dossier Builder
         dossier = BSADossierBuilder.build_certificate(
             case_id=trail.case_id,
             sha256_hash=sha256,
@@ -195,7 +214,8 @@ async def execute_audit(
             "deterministic": {
                 "mrz": mrz_res,
                 "dihedral_valid": dihedral_valid,
-                "qr": qr_res
+                "qr": qr_res,
+                "live_face_verification": live_match_res
             },
             "forensics": {
                 "box_count": box_count,
@@ -204,11 +224,12 @@ async def execute_audit(
                     "detected": face_res.get("face_detected", False),
                     "swap_score": photo_swap_data["swap_score"],
                     "anomaly_detected": photo_swap_data["anomaly_detected"],
-                    "face_match": {
+                    "qr_avatar_match": {
                         "evaluated": face_match_res.get("evaluated", False),
                         "similarity_score": face_match_res.get("similarity_score", 1.0),
                         "status": face_match_res.get("match_status", "SKIPPED")
-                    }
+                    },
+                    "live_selfie_match": live_match_res
                 },
                 "ela_variance": ela_res.get("ela_variance", 0.0),
                 "texture_variance": texture_res.get("mean_variance", 0.0),
@@ -225,7 +246,8 @@ async def execute_audit(
                 "orig_b64": f"data:image/png;base64,{mat_to_b64(warped_cv)}",
                 "annotated_b64": f"data:image/png;base64,{mat_to_b64(annotated)}",
                 "ela_b64": f"data:image/png;base64,{pil_to_b64(ela_res.get('ela_enhanced', orig_pil))}",
-                "face_b64": f"data:image/png;base64,{mat_to_b64(face_res['face_crop'])}" if face_res.get("face_detected") else None
+                "face_b64": f"data:image/png;base64,{mat_to_b64(face_res['face_crop'])}" if face_res.get("face_detected") else None,
+                "live_face_b64": f"data:image/png;base64,{mat_to_b64(live_match_res['live_face_crop'])}" if live_match_res.get("evaluated") and live_match_res.get("live_face_crop") is not None else None
             }
         }
 
