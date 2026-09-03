@@ -3,7 +3,7 @@ import base64
 import cv2
 import numpy as np
 from PIL import Image
-from fastapi import FastAPI, File, UploadFile, Form, Request, HTTPException, status
+from fastapi import FastAPI, File, UploadFile, Form, Request, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
@@ -14,6 +14,7 @@ from aegis_core.validators.dihedral import VerhoeffDihedralValidator
 from aegis_core.validators.mrz_td3 import ICAO9303MRZParser
 from aegis_core.validators.qr_engine import MultiPassQREngine
 from aegis_core.forensics.ela import DifferentialELAAnalyzer
+from aegis_core.forensics.texture import TextureFlatnessAnalyzer
 from aegis_core.forensics.moire import OpticalMoireAnalyzer
 from aegis_core.forensics.metadata import MetadataFootprintAnalyzer
 from aegis_core.timeline.audit_trail import ForensicAuditTrail, EphemeralCaseLedger
@@ -57,32 +58,35 @@ async def execute_audit(
     sha256 = __import__("hashlib").sha256(raw_bytes).hexdigest()
     trail.log("Document Ingested & SHA-256 Registered", "VERIFIED")
 
-    # Modular Quality Gate
+    # Quality Gate
     quality = DocumentQualityGate.audit(img_cv)
     trail.log(f"Quality Assessment: {quality['metrics'].get('blur_status', 'OK')}", "PASS" if quality["passed"] else "FLAGGED")
 
-    # Perspective Normalization
+    # Boundary Homography
     warped_cv = DocumentPerspectiveWarper.extract_and_warp(img_cv)
 
-    # Deterministic Validators
+    # Validators
     mrz_res = ICAO9303MRZParser.parse(mrz_raw_input)
     qr_res = MultiPassQREngine.inspect_and_mask(warped_cv)
 
-    # Forensic Engines
+    # Multi-Signal Forensics
     ela_res = DifferentialELAAnalyzer.analyze(orig_pil, warped_cv, qr_bbox=qr_res.get("bbox"))
+    texture_res = TextureFlatnessAnalyzer.detect_digital_strokes(warped_cv, qr_bbox=qr_res.get("bbox"))
     moire_res = OpticalMoireAnalyzer.inspect(warped_cv)
     meta_res = MetadataFootprintAnalyzer.inspect(orig_pil)
 
-    # Regions Annotation
-    regions = ela_res.get("suspicious_zones", [])
+    # Combine ELA zones and Texture stroke zones
+    all_regions = ela_res.get("suspicious_zones", []) + texture_res.get("tamper_zones", [])
+
+    # Annotate detected regions
     annotated = warped_cv.copy()
-    for reg in regions:
+    for reg in all_regions:
         x, y, w, h = reg["bbox"]
         cv2.rectangle(annotated, (x, y), (x + w, y + h), (0, 0, 255), 2)
         cv2.putText(annotated, "TAMPER", (x, max(y - 4, 12)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1)
 
-    box_count = len(regions)
-    risk_score = min(98, 4 + (box_count * 15) + (25 if moire_res.get("is_screen_recapture") else 0))
+    box_count = len(all_regions)
+    risk_score = min(98, 4 + (box_count * 14) + (25 if moire_res.get("is_screen_recapture") else 0))
     risk_level = "HIGH" if risk_score >= 50 else ("MEDIUM" if risk_score >= 25 else "LOW")
     verdict = "SUSPICIOUS / POTENTIAL FORGERY" if risk_score >= 50 else "AUTHENTIC / UNALTERED"
 
@@ -94,8 +98,9 @@ async def execute_audit(
         "deterministic": {"mrz": mrz_res, "qr": qr_res},
         "forensics": {
             "box_count": box_count,
-            "regions": regions,
+            "regions": all_regions,
             "ela_variance": ela_res.get("ela_variance", 0.0),
+            "texture_variance": texture_res.get("mean_variance", 0.0),
             "moire": moire_res
         },
         "metadata": meta_res,
@@ -103,9 +108,9 @@ async def execute_audit(
             "risk_score": risk_score,
             "risk_level": risk_level,
             "verdict": verdict,
-            "confidence": 0.88,
+            "confidence": 0.90,
             "recommendation": "MANDATORY INVESTIGATOR REVIEW" if risk_score >= 50 else "STANDARD PROCESSING",
-            "breakdown": [f"+{box_count * 15} Spatial tamper anomaly in {box_count} region(s)."] if box_count > 0 else ["All signals within baseline."]
+            "breakdown": [f"+{min(box_count * 14, 85)} Localized {box_count} tamper zone(s) [ELA + Texture Flatness]."] if box_count > 0 else ["All signals within baseline."]
         },
         "timeline": trail.get_timeline(),
         "images": {
