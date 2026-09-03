@@ -154,7 +154,9 @@ class MultiSignalForensics:
         buffered.seek(0)
         resaved = Image.open(buffered)
 
-        # 1. Multi-Band RGB Difference
+        # ---------------------------------------------------------
+        # SIGNAL 1: Multi-Band Chrominance & Luminance ELA
+        # ---------------------------------------------------------
         ela_im = ImageChops.difference(rgb_pil, resaved)
         extrema = ela_im.getextrema()
         max_diff = max([ex[1] for ex in extrema])
@@ -162,32 +164,49 @@ class MultiSignalForensics:
         ela_enhanced = ImageEnhance.Brightness(ela_im).enhance(scale)
         ela_cv = cv2.cvtColor(np.array(ela_enhanced), cv2.COLOR_RGB2BGR)
 
-        # 2. Channel Max Delta (Catches dark-on-dark hair strokes & color edits)
         diff_np = np.array(ela_im).astype(np.float32)
         channel_max = np.max(diff_np, axis=2).astype(np.uint8)
 
-        # 3. Dynamic Thresholding on Card Canvas
         orig_gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY) if len(img_cv.shape) == 3 else img_cv
-        doc_mask = orig_gray > 35
+        doc_mask = orig_gray > 30
         valid_pixels = channel_max[doc_mask] if np.sum(doc_mask) > 500 else channel_max
         mean_val = float(np.mean(valid_pixels))
         std_val = float(np.std(valid_pixels))
 
-        # Sensitive stroke floor: 32 catches faint pen ink and overlays
-        dynamic_thresh = max(32, min(int(mean_val + (1.45 * std_val)), 58))
-        _, thresh = cv2.threshold(channel_max, dynamic_thresh, 255, cv2.THRESH_BINARY)
+        dynamic_thresh = max(28, min(int(mean_val + (1.35 * std_val)), 54))
+        _, thresh_ela = cv2.threshold(channel_max, dynamic_thresh, 255, cv2.THRESH_BINARY)
 
-        # 4. Adaptive Stroke Fusion (Local gradient discontinuity)
+        # ---------------------------------------------------------
+        # SIGNAL 2: High-Pass Spatial Noise Residual (PRNU Residual)
+        # ---------------------------------------------------------
+        denoised = cv2.medianBlur(orig_gray, 3)
+        noise_residual = cv2.absdiff(orig_gray, denoised)
+        global_noise_var = float(np.var(noise_residual))
+
+        # Local variance of noise residual across 5x5 sliding window
+        mean_noise = cv2.blur(noise_residual.astype(np.float32), (5, 5))
+        sq_noise = cv2.blur((noise_residual.astype(np.float32)) ** 2, (5, 5))
+        local_var = cv2.max(sq_noise - (mean_noise ** 2), 0)
+        norm_var = cv2.normalize(local_var, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+        _, thresh_noise = cv2.threshold(norm_var, 38, 255, cv2.THRESH_BINARY)
+
+        # ---------------------------------------------------------
+        # SIGNAL 3: Sharp Discontinuity Gradient on Brush Boundaries
+        # ---------------------------------------------------------
         sobel_x = cv2.Sobel(orig_gray, cv2.CV_64F, 1, 0, ksize=3)
         sobel_y = cv2.Sobel(orig_gray, cv2.CV_64F, 0, 1, ksize=3)
-        grad_mag = np.sqrt(sobel_x**2 + sobel_y**2).astype(np.uint8)
-        _, grad_thresh = cv2.threshold(grad_mag, 110, 255, cv2.THRESH_BINARY)
-        
-        # Combine compression residual + abrupt hand-drawn edge jumps
-        combined_tamper = cv2.bitwise_or(thresh, cv2.bitwise_and(thresh, grad_thresh))
+        grad_mag = np.sqrt(sobel_x**2 + sobel_y**2)
+        grad_norm = cv2.normalize(grad_mag, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+        _, thresh_grad = cv2.threshold(grad_norm, 85, 255, cv2.THRESH_BINARY)
 
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (4, 4))
-        closed = cv2.morphologyEx(combined_tamper, cv2.MORPH_CLOSE, kernel)
+        # Multi-Signal Spatial Fusion
+        stroke_candidates = cv2.bitwise_or(thresh_ela, thresh_noise)
+        combined_tamper = cv2.bitwise_or(stroke_candidates, cv2.bitwise_and(thresh_ela, thresh_grad))
+
+        # Morphological grouping
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        dilated = cv2.dilate(combined_tamper, kernel, iterations=1)
+        closed = cv2.morphologyEx(dilated, cv2.MORPH_CLOSE, kernel)
 
         contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         annotated_cv = img_cv.copy() if len(img_cv.shape) == 3 else cv2.cvtColor(img_cv, cv2.COLOR_GRAY2BGR)
@@ -199,24 +218,22 @@ class MultiSignalForensics:
 
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            # Area floor lowered to 15 to capture small slashes, dots, and stroke segments
-            if 15 < area < (total_area * 0.18):
+            # Area floor 10px captures micro-dots, pen slashes, and strike-through segments
+            if 10 < area < (total_area * 0.20):
                 x, y, w, h = cv2.boundingRect(cnt)
-                aspect = float(w) / max(h, 1)
 
-                # Differentiate clean printed divider rules from hand-drawn strike-throughs:
-                # Real divider rules span > 70% width and have < 4px height
-                if w > (w_img * 0.70) and h < 5:
+                # Filter genuine document horizontal margin borders
+                if w > (w_img * 0.75) and h < 5:
                     continue
 
                 cv2.rectangle(annotated_cv, (x, y), (x + w, y + h), (0, 0, 255), 2)
-                cv2.putText(annotated_cv, "TAMPER", (x, max(y - 4, 12)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1, cv2.LINE_AA)
+                cv2.putText(annotated_cv, "TAMPER", (x, max(y - 3, 10)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 0, 255), 1, cv2.LINE_AA)
 
                 suspicious_regions.append({
                     "region_id": f"REG_{box_count + 1}",
                     "bbox": [int(x), int(y), int(w), int(h)],
-                    "anomaly_score": 0.88
+                    "anomaly_score": 0.90
                 })
                 box_count += 1
 
@@ -224,6 +241,7 @@ class MultiSignalForensics:
             "ela_enhanced": ela_enhanced,
             "annotated_cv": annotated_cv,
             "ela_variance": round(std_val, 2),
+            "noise_variance": round(global_noise_var, 2),
             "tamper_regions": suspicious_regions,
             "box_count": box_count
         }
@@ -247,9 +265,9 @@ class RiskFusionEngine:
             }
 
         if boxes > 0:
-            assigned = min(50 + (boxes * 12), 92)
+            assigned = min(50 + (boxes * 10), 95)
             risk_accum += assigned
-            explanations.append(f"+{assigned} Spatial pixel tampering localized in {boxes} distinct region(s).")
+            explanations.append(f"+{assigned} Multi-signal tampering localized across {boxes} distinct region(s) [Chroma-ELA + Noise Residual].")
         elif forensics.get("ela_variance", 0) > 30.0:
             risk_accum += 10
             explanations.append("+10 Compression variance indicates potential re-saving artifacts.")
@@ -278,7 +296,7 @@ class RiskFusionEngine:
             "verdict": verdict,
             "risk_score": final_risk,
             "risk_level": level,
-            "confidence": 0.88 if quality.get("passed", False) else 0.65,
+            "confidence": 0.90 if quality.get("passed", False) else 0.65,
             "breakdown": explanations if explanations else ["All structural, cryptographic, and spatial signals within normal baseline tolerances."],
             "recommendation": rec
         }
