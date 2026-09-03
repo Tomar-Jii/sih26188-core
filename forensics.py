@@ -79,18 +79,18 @@ class DocumentQualityEngine:
         gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY) if len(img_cv.shape) == 3 else img_cv
 
         lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-        blur_status = "Good" if lap_var > 60.0 else ("Acceptable" if lap_var > 14.0 else "Poor (Blurry)")
+        blur_status = "Good" if lap_var > 50.0 else ("Acceptable" if lap_var > 12.0 else "Poor (Blurry)")
 
         hist = cv2.calcHist([gray], [0], None, [256], [0, 256])
         total_pixels = max(h * w, 1)
         pure_white_ratio = float(np.sum(hist[250:]) / total_pixels)
         glare_status = "High (Glare Detected)" if pure_white_ratio > 0.18 else "Normal"
 
-        passed = bool(lap_var > 14.0 and pure_white_ratio <= 0.25 and w >= 150 and h >= 150)
+        passed = bool(lap_var > 12.0 and pure_white_ratio <= 0.25 and w >= 150 and h >= 150)
         abstain_reason = None
         if not passed:
             reasons = []
-            if lap_var <= 14.0: reasons.append("Severe Motion Blur")
+            if lap_var <= 12.0: reasons.append("Severe Motion Blur")
             if pure_white_ratio > 0.25: reasons.append("Severe Glare")
             abstain_reason = "; ".join(reasons)
 
@@ -162,36 +162,31 @@ class MultiSignalForensics:
         ela_cv = cv2.cvtColor(np.array(ela_enhanced), cv2.COLOR_RGB2BGR)
         gray_ela = cv2.cvtColor(ela_cv, cv2.COLOR_BGR2GRAY)
 
-        # 1. Background Suppression: Calculate stats ONLY on bright document pixels (ignore black hands/room)
         orig_gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY) if len(img_cv.shape) == 3 else img_cv
-        doc_mask = orig_gray > 45  # Mask out dark background
-        
-        valid_ela_pixels = gray_ela[doc_mask] if np.sum(doc_mask) > 500 else gray_ela
-        mean_val = float(np.mean(valid_ela_pixels))
-        std_val = float(np.std(valid_ela_pixels))
+        doc_mask = orig_gray > 40
+        valid_ela = gray_ela[doc_mask] if np.sum(doc_mask) > 500 else gray_ela
+        mean_val = float(np.mean(valid_ela))
+        std_val = float(np.std(valid_ela))
 
-        # Calibrated dynamic threshold: floor raised to 68 to prevent normal black text from triggering
-        dynamic_thresh = max(68, min(int(mean_val + (2.4 * std_val)), 92))
+        # Precision threshold clamped to 50-70 to catch subtle digit strokes
+        dynamic_thresh = max(50, min(int(mean_val + (1.8 * std_val)), 70))
 
-        blur_ela = cv2.GaussianBlur(gray_ela, (5, 5), 0)
+        blur_ela = cv2.GaussianBlur(gray_ela, (3, 3), 0)
         _, thresh = cv2.threshold(blur_ela, dynamic_thresh, 255, cv2.THRESH_BINARY)
 
-        # 2. QR Code Suppression: Detect QR region and mask it out completely
+        # Precise QR Masking (Only target the actual square QR matrix)
         try:
             qr_detector = cv2.QRCodeDetector()
             _, qr_pts = qr_detector.detect(img_cv)
             if qr_pts is not None:
                 pts = qr_pts[0].astype(int)
                 x_qr, y_qr, w_qr, h_qr = cv2.boundingRect(pts)
-                pad = 15
-                cv2.rectangle(thresh, 
-                              (max(0, x_qr - pad), max(0, y_qr - pad)), 
-                              (min(thresh.shape[1], x_qr + w_qr + pad), min(thresh.shape[0], y_qr + h_qr + pad)), 
-                              0, -1)
+                cv2.rectangle(thresh, (max(0, x_qr - 5), max(0, y_qr - 5)),
+                              (min(thresh.shape[1], x_qr + w_qr + 5), min(thresh.shape[0], y_qr + h_qr + 5)), 0, -1)
         except Exception:
             pass
 
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 5))
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
         closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
 
         contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -204,26 +199,27 @@ class MultiSignalForensics:
 
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            if 110 < area < (total_area * 0.12):
+            # Catch small altered strokes, ink edits, or modified digits (floor 35px)
+            if 35 < area < (total_area * 0.10):
                 x, y, w, h = cv2.boundingRect(cnt)
                 aspect = float(w) / max(h, 1)
 
-                # Filter out thin horizontal lines (e.g. red underline)
-                if aspect > 4.5 and h < 14:
+                # Filter out extreme horizontal divider lines
+                if aspect > 5.0 and h < 12:
                     continue
 
-                # Filter out QR code squares even if corner detection missed
-                if area > 1800 and 0.80 < aspect < 1.25 and x > (w_img * 0.40):
+                # Filter large QR squares
+                if area > 2000 and 0.82 < aspect < 1.22 and x > (w_img * 0.40):
                     continue
 
                 cv2.rectangle(annotated_cv, (x, y), (x + w, y + h), (0, 0, 255), 2)
-                cv2.putText(annotated_cv, "TAMPER", (x, max(y - 4, 14)),
+                cv2.putText(annotated_cv, "TAMPER", (x, max(y - 4, 12)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1, cv2.LINE_AA)
 
                 suspicious_regions.append({
                     "region_id": f"REG_{box_count + 1}",
                     "bbox": [int(x), int(y), int(w), int(h)],
-                    "anomaly_score": 0.82
+                    "anomaly_score": 0.85
                 })
                 box_count += 1
 
@@ -254,7 +250,7 @@ class RiskFusionEngine:
             }
 
         if boxes > 0:
-            assigned = min(45 + (boxes * 15), 75)
+            assigned = min(45 + (boxes * 15), 80)
             risk_accum += assigned
             explanations.append(f"+{assigned} Spatial pixel tampering localized in {boxes} distinct region(s).")
         elif forensics.get("ela_variance", 0) > 30.0:
@@ -264,7 +260,7 @@ class RiskFusionEngine:
         mrz = deterministic.get("mrz", {})
         if mrz.get("is_mrz_detected") and not mrz.get("all_checks_passed"):
             risk_accum += 30
-            explanations.append("+30 ICAO 9303 check digit verification mismatch.")
+            explanations.append("+30 Check digit verification mismatch.")
 
         moire = forensics.get("moire", {})
         if moire.get("is_screen_recapture"):
