@@ -91,8 +91,12 @@ async def execute_audit(
         if mrz_res.get("is_mrz_detected"):
             trail.log(f"ICAO Doc 9303 MRZ Checksum: {'PASS' if mrz_res.get('all_checks_passed') else 'FAIL'}", "PASS" if mrz_res.get('all_checks_passed') else "FLAGGED")
 
-        # 4. Multi-Pass Secure QR Decoder
+        # 4. Multi-Pass Secure QR Decoder (Collects all QR bboxes)
         qr_res = MultiPassQREngine.inspect_and_mask(warped_cv)
+        all_qr_boxes = qr_res.get("bboxes", [])
+        if qr_res.get("bbox") and qr_res.get("bbox") not in all_qr_boxes:
+            all_qr_boxes.append(qr_res["bbox"])
+
         if qr_res.get("detected"):
             trail.log(f"Cryptographic Ground-Truth: {qr_res.get('status')}", "PASS")
 
@@ -103,7 +107,7 @@ async def execute_audit(
         # 6. Biometric Portrait Extraction
         face_res = BiometricPortraitAnalyzer.extract_and_audit(warped_cv)
 
-        # 7. ADDITIVE: Biometric Cross-Vector Portrait Match (Card Photo vs Signed QR Avatar)
+        # 7. Biometric Cross-Vector Portrait Match (Card Photo vs Signed QR Avatar)
         face_match_res = {"evaluated": False, "match_status": "SKIPPED", "similarity_score": 1.0, "is_photo_swap": False}
         qr_payload = qr_res.get("payload")
         if qr_payload and isinstance(qr_payload, dict) and qr_payload.get("has_photo") and face_res.get("face_detected"):
@@ -112,8 +116,8 @@ async def execute_audit(
                 log_status = "PASS" if not face_match_res.get("is_photo_swap") else "FLAGGED"
                 trail.log(f"Biometric Avatar Audit: {face_match_res['match_status']} (Corr: {int(face_match_res['similarity_score']*100)}%)", log_status)
 
-        # 8. Forensic Defacement & Anomaly Scanners
-        texture_res = TextureFlatnessAnalyzer.detect_digital_strokes(warped_cv, qr_bbox=qr_res.get("bbox"))
+        # 8. Forensic Defacement & Spatial Scanners (Passing all QR bounding boxes)
+        texture_res = TextureFlatnessAnalyzer.detect_digital_strokes(warped_cv, qr_bbox=qr_res.get("bbox"), qr_bboxes=all_qr_boxes)
         ela_res = DifferentialELAAnalyzer.analyze(warped_pil, warped_cv, qr_bbox=qr_res.get("bbox"))
         gradient_res = EdgeDiscontinuityAnalyzer.audit(warped_cv, qr_bbox=qr_res.get("bbox"))
         noise_res = LocalNoiseAnalyzer.audit(warped_cv, qr_bbox=qr_res.get("bbox"))
@@ -144,7 +148,7 @@ async def execute_audit(
         # 11. Risk Engine Synthesis
         photo_swap_data = {
             "face_detected": face_res.get("face_detected", False),
-            "anomaly_detected": face_match_res.get("is_photo_swap", False) or face_res.get("anomaly_detected", False),
+            "anomaly_detected": face_match_res.get("is_photo_swap", False),
             "swap_score": 0.95 if face_match_res.get("is_photo_swap") else 0.05
         }
 
@@ -160,7 +164,7 @@ async def execute_audit(
             cross_field_result=cross_field_res
         )
 
-        # 12. Confidence & Abstention
+        # 12. Confidence & Abstention Gate
         final_verdict = ConfidenceAbstentionGate.evaluate(quality, merged_regions, risk_data)
         trail.log(f"Risk Fusion Synthesis: Score {final_verdict['risk_score']}/100 ({final_verdict['risk_level']})", "COMPLETED")
 

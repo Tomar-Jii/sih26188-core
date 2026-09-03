@@ -2,17 +2,13 @@ import zlib
 import re
 import cv2
 import numpy as np
-from PIL import Image
-import io
 
 class MultiPassQREngine:
-    """Enterprise Aadhaar Secure QR Decoder: Decompresses UIDAI V2/V3 binary streams and legacy XML."""
+    """Enterprise Aadhaar Secure QR Decoder with multi-matrix isolation for full-sheet documents."""
 
     @classmethod
     def decode_secure_v2(cls, qr_text: str) -> dict:
-        """Decompresses UIDAI Secure QR code (large integer / zlib compressed byte stream)."""
         try:
-            # Secure V2 QR is represented as a big decimal integer string
             if qr_text.isdigit() and len(qr_text) > 400:
                 big_int = int(qr_text)
                 byte_len = (big_int.bit_length() + 7) // 8
@@ -22,10 +18,8 @@ class MultiPassQREngine:
                 raw_bytes = qr_text.encode('latin1')
                 decompressed = zlib.decompress(raw_bytes)
 
-            # Split delimiter (0xFF / 255)
             parts = decompressed.split(b'\xff')
             if len(parts) >= 15:
-                # V2 Structure: Email, Mobile, RefID, Name, DOB, Gender, CareOf, District, Landmark, House, Loc, Pin, PO, State, ImageBytes
                 name = parts[3].decode('latin1', errors='ignore')
                 dob = parts[4].decode('latin1', errors='ignore')
                 gender = parts[5].decode('latin1', errors='ignore')
@@ -48,7 +42,6 @@ class MultiPassQREngine:
 
     @classmethod
     def decode_xml_legacy(cls, qr_text: str) -> dict:
-        """Parses legacy PrintLetterBarcodeData XML format."""
         if "PrintLetterBarcodeData" in qr_text or "<xml" in qr_text.lower():
             uid = re.search(r'uid="(\d+)"', qr_text)
             name = re.search(r'name="([^"]+)"', qr_text)
@@ -69,62 +62,99 @@ class MultiPassQREngine:
         return None
 
     @classmethod
+    def find_all_qr_regions(cls, gray: np.ndarray) -> list:
+        """Locates all 2D barcode matrix clusters across the entire document sheet."""
+        h, w = gray.shape[:2]
+        all_bboxes = []
+
+        # 1. OpenCV Multi-QR Detector
+        detector = cv2.QRCodeDetector()
+        success, _, pts, _ = detector.detectAndDecodeMulti(gray)
+        if success and pts is not None:
+            for p in pts:
+                p_arr = p.reshape(-1, 2)
+                x1, y1 = np.min(p_arr[:, 0]), np.min(p_arr[:, 1])
+                x2, y2 = np.max(p_arr[:, 0]), np.max(p_arr[:, 1])
+                all_bboxes.append([int(x1), int(y1), int(x2 - x1), int(y2 - y1)])
+
+        # 2. Morphological High-Frequency Matrix Finder (Finds dense QR blocks even if decode fails)
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        contrast = clahe.apply(gray)
+        grad = cv2.morphologyEx(contrast, cv2.MORPH_GRADIENT, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)))
+        _, thresh = cv2.threshold(grad, 45, 255, cv2.THRESH_BINARY)
+        
+        # Dense module closing
+        closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15)))
+        cnts, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        total_area = h * w
+        for c in cnts:
+            area = cv2.contourArea(c)
+            if (total_area * 0.008) < area < (total_area * 0.18):
+                x, y, bw, bh = cv2.boundingRect(c)
+                ratio = float(bw) / max(bh, 1)
+                # QR matrices are strictly square (aspect 0.82 to 1.22)
+                if 0.80 <= ratio <= 1.25 and bw > 65 and bh > 65:
+                    # Check if not already included
+                    if not any(abs(x - b[0]) < 25 and abs(y - b[1]) < 25 for b in all_bboxes):
+                        all_bboxes.append([x, y, bw, bh])
+
+        return all_bboxes
+
+    @classmethod
     def inspect_and_mask(cls, img_cv: np.ndarray) -> dict:
         if img_cv is None or img_cv.size == 0:
-            return {"detected": False, "status": "No Image", "bbox": None, "payload": None}
+            return {"detected": False, "status": "No Image", "bbox": None, "bboxes": [], "payload": None}
 
         gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY) if len(img_cv.shape) == 3 else img_cv
-        h, w = gray.shape[:2]
+        all_bboxes = cls.find_all_qr_regions(gray)
 
+        # Attempt decoding on located QR regions
         detector = cv2.QRCodeDetector()
-        
-        # Multi-scale QR search (Full page, Bottom Half, and Local ROI)
-        candidates = [gray]
-        if h > 800:
-            candidates.append(cv2.resize(gray, (int(w * 0.5), int(h * 0.5))))
-
         payload_text = ""
-        points = None
 
-        for scale_img in candidates:
-            success, decoded_info, pts, _ = detector.detectAndDecodeMulti(scale_img)
-            if success and len(decoded_info) > 0:
-                for text, pt in zip(decoded_info, pts):
-                    if len(text.strip()) > 0:
-                        payload_text = text
-                        # Scale points back if resized
-                        scale_factor = float(w) / scale_img.shape[1]
-                        points = pt * scale_factor
+        # Test full image first
+        decoded, pts, _ = detector.detectAndDecode(gray)
+        if decoded:
+            payload_text = decoded
+
+        # If not decoded, test each cropped ROI with adaptive thresholds
+        if not payload_text:
+            for bx, by, bw, bh in all_bboxes:
+                pad = 10
+                y1, y2 = max(0, by - pad), min(gray.shape[0], by + bh + pad)
+                x1, x2 = max(0, bx - pad), min(gray.shape[1], bx + bw + pad)
+                roi = gray[y1:y2, x1:x2]
+                
+                # Multi-scale decode attempts
+                for scale in [1.0, 1.5, 0.75]:
+                    resized_roi = cv2.resize(roi, (0, 0), fx=scale, fy=scale) if scale != 1.0 else roi
+                    txt, _, _ = detector.detectAndDecode(resized_roi)
+                    if txt:
+                        payload_text = txt
                         break
-            if payload_text:
-                break
+                if payload_text:
+                    break
 
-        # Fallback single detection
-        if not payload_text:
-            text, pts, _ = detector.detectAndDecode(gray)
-            if text:
-                payload_text = text
-                points = pts
-
-        bbox = None
-        if points is not None and len(points) > 0:
-            pts = points[0] if points.ndim == 3 else points
-            x_min = int(np.min(pts[:, 0]))
-            y_min = int(np.min(pts[:, 1]))
-            x_max = int(np.max(pts[:, 0]))
-            y_max = int(np.max(pts[:, 1]))
-            bbox = [max(0, x_min), max(0, y_min), min(w, x_max - x_min), min(h, y_max - y_min)]
+        primary_bbox = all_bboxes[0] if all_bboxes else None
 
         if not payload_text:
-            return {"detected": False, "status": "QR Not Located", "bbox": None, "payload": None}
+            return {
+                "detected": len(all_bboxes) > 0,
+                "status": f"Found {len(all_bboxes)} Document QR Zone(s) (Physical Matrix Masked)" if all_bboxes else "QR Not Located",
+                "bbox": primary_bbox,
+                "bboxes": all_bboxes,
+                "payload": None
+            }
 
-        # Parse payload
+        # Check payload format
         secure_data = cls.decode_secure_v2(payload_text)
         if secure_data:
             return {
                 "detected": True,
                 "status": "UIDAI Cryptographically Signed Secure QR Verified",
-                "bbox": bbox,
+                "bbox": primary_bbox,
+                "bboxes": all_bboxes,
                 "payload": secure_data
             }
 
@@ -133,13 +163,15 @@ class MultiPassQREngine:
             return {
                 "detected": True,
                 "status": "Legacy UIDAI XML Barcode Verified",
-                "bbox": bbox,
+                "bbox": primary_bbox,
+                "bboxes": all_bboxes,
                 "payload": legacy_data
             }
 
         return {
             "detected": True,
-            "status": "Generic QR Decoded",
-            "bbox": bbox,
+            "status": "Document QR Decoded",
+            "bbox": primary_bbox,
+            "bboxes": all_bboxes,
             "payload": {"raw": payload_text[:80]}
         }
