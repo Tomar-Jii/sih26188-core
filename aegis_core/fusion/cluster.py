@@ -1,7 +1,7 @@
 import numpy as np
 
 class SpatialRegionMerger:
-    """Merges overlapping and closely adjacent tamper boxes using IoU and spatial proximity."""
+    """Merges overlapping tamper candidates and filters unverified single-signal false alarms."""
 
     @staticmethod
     def compute_iou(boxA: list, boxB: list) -> float:
@@ -24,7 +24,6 @@ class SpatialRegionMerger:
 
     @staticmethod
     def is_nearby(boxA: list, boxB: list, max_distance: int = 12) -> bool:
-        """Checks if two broken stroke segments are within close proximity."""
         a_x1, a_y1, a_x2, a_y2 = boxA[0], boxA[1], boxA[0] + boxA[2], boxA[1] + boxA[3]
         b_x1, b_y1, b_x2, b_y2 = boxB[0], boxB[1], boxB[0] + boxB[2], boxB[1] + boxB[3]
 
@@ -35,7 +34,6 @@ class SpatialRegionMerger:
 
     @classmethod
     def merge_regions(cls, raw_regions: list, iou_thresh: float = 0.18, max_dist: int = 12, **kwargs) -> list:
-        # Flexible argument resolution for both naming conventions
         thresh = kwargs.get("iou_threshold", kwargs.get("iou_thresh", iou_thresh))
         dist = kwargs.get("max_distance", kwargs.get("max_dist", max_dist))
 
@@ -68,6 +66,15 @@ class SpatialRegionMerger:
             signals = list(set([z.get("signal", "Spatial Anomaly") for z in cluster]))
             is_multi_confirmed = len(signals) > 1
 
+            # Strong signals that are permitted to trigger alone
+            has_primary_stroke = any("Digital Ink" in s or "Compression" in s or "Photo-Swap" in s for s in signals)
+
+            # FALSE POSITIVE SHIELD:
+            # Drop candidate if it is just an isolated edge/font/noise artifact on normal printed text
+            if not is_multi_confirmed and not has_primary_stroke:
+                sorted_zones = remaining
+                continue
+
             base_score = max(z.get("score", 0.85) for z in cluster)
             final_score = min(0.98, base_score + (0.08 if is_multi_confirmed else 0.0))
 
@@ -75,7 +82,6 @@ class SpatialRegionMerger:
                 "region_id": f"ZONE_{len(merged) + 1}",
                 "bbox": [int(x_min), int(y_min), int(x_max - x_min), int(y_max - y_min)],
                 "score": round(final_score, 2),
-                "anomaly_score": round(final_score, 2),
                 "signals": signals,
                 "multi_signal_verified": is_multi_confirmed
             })
