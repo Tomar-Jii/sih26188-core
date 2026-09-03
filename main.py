@@ -10,6 +10,7 @@ from fastapi.templating import Jinja2Templates
 from aegis_core.config import CONFIG
 from aegis_core.quality.gatekeeper import DocumentQualityGate
 from aegis_core.vision.warp import DocumentPerspectiveWarper
+from aegis_core.vision.face_segment import BiometricPortraitAnalyzer
 from aegis_core.validators.dihedral import VerhoeffDihedralValidator
 from aegis_core.validators.mrz_td3 import ICAO9303MRZParser
 from aegis_core.validators.qr_engine import MultiPassQREngine
@@ -61,26 +62,34 @@ async def execute_audit(
 
     # 1. Quality Assessment Gate
     quality = DocumentQualityGate.audit(img_cv)
-    trail.log(f"Quality Assessment: {quality['metrics'].get('blur_status', 'OK')}", "PASS" if quality["passed"] else "FLAGGED")
+    trail.log(f"Quality Gate: {quality['metrics'].get('blur_status', 'OK')} Sharpness", "PASS" if quality["passed"] else "FLAGGED")
 
-    # 2. Document Surface Perspective Normalization
+    # 2. Document Perspective Normalization
     warped_cv = DocumentPerspectiveWarper.extract_and_warp(img_cv)
 
     # 3. Deterministic Cryptographic & Format Validation
     mrz_res = ICAO9303MRZParser.parse(mrz_raw_input)
     qr_res = MultiPassQREngine.inspect_and_mask(warped_cv)
 
-    # 4. Multi-Signal Spatial Forensic Scanners
+    # 4. Biometric Face Segmentation & Splicing Audit
+    face_res = BiometricPortraitAnalyzer.extract_and_audit(warped_cv)
+    trail.log(f"Biometric Portrait: {'Segmented' if face_res['face_detected'] else 'No Face'} (Swap Score: {face_res['swap_score']})",
+              "SUSPICIOUS" if face_res["anomaly_detected"] else "PASS")
+
+    # 5. Multi-Signal Spatial Scanners
     ela_res = DifferentialELAAnalyzer.analyze(orig_pil, warped_cv, qr_bbox=qr_res.get("bbox"))
     texture_res = TextureFlatnessAnalyzer.detect_digital_strokes(warped_cv, qr_bbox=qr_res.get("bbox"))
     moire_res = OpticalMoireAnalyzer.inspect(warped_cv)
     meta_res = MetadataFootprintAnalyzer.inspect(orig_pil)
 
-    # 5. Phase 6: Spatial NMS & Proximity Clustering
+    # 6. Spatial NMS Fusion
     raw_candidates = ela_res.get("suspicious_zones", []) + texture_res.get("tamper_zones", [])
+    if face_res.get("tamper_zone"):
+        raw_candidates.append(face_res["tamper_zone"])
+
     merged_regions = SpatialRegionMerger.merge_regions(raw_candidates, iou_thresh=0.18, max_dist=12)
 
-    # 6. High-Precision Annotation
+    # 7. Coordinate Annotation
     annotated = warped_cv.copy()
     for reg in merged_regions:
         x, y, w, h = reg["bbox"]
@@ -89,17 +98,19 @@ async def execute_audit(
         cv2.putText(annotated, tag, (x, max(y - 4, 12)), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 0, 255), 1)
 
     box_count = len(merged_regions)
-    risk_score = min(98, 4 + (box_count * 16) + (25 if moire_res.get("is_screen_recapture") else 0))
+    risk_score = min(98, 4 + (box_count * 15) + (25 if moire_res.get("is_screen_recapture") else 0) + (30 if face_res["anomaly_detected"] else 0))
     risk_level = "HIGH" if risk_score >= 50 else ("MEDIUM" if risk_score >= 25 else "LOW")
     verdict = "SUSPICIOUS / POTENTIAL FORGERY" if risk_score >= 50 else "AUTHENTIC / UNALTERED"
 
-    trail.log(f"Spatial Fusion: Localized {box_count} Consolidated Tamper Zone(s)", "FLAGGED" if box_count > 0 else "PASS")
+    trail.log(f"Spatial Fusion: {box_count} Consolidated Zone(s)", "FLAGGED" if box_count > 0 else "PASS")
 
     breakdown = []
     if box_count > 0:
-        breakdown.append(f"+{min(box_count * 16, 85)} Localized {box_count} consolidated tamper region(s) [Multi-Signal NMS Clustered].")
+        breakdown.append(f"+{min(box_count * 15, 85)} Localized {box_count} consolidated tamper region(s) [Multi-Signal NMS Clustered].")
+    if face_res["anomaly_detected"]:
+        breakdown.append(f"+30 Biometric portrait perimeter discontinuity: High boundary gradient step suggests photo-replacement.")
     if moire_res.get("is_screen_recapture"):
-        breakdown.append(f"+25 Screen recapture frequency pattern detected (PAPR: {moire_res.get('papr_score')}).")
+        breakdown.append(f"+25 Optical screen grid frequencies detected (PAPR: {moire_res.get('papr_score')}).")
     if not breakdown:
         breakdown.append("All structural, cryptographic, and spatial signals within baseline tolerances.")
 
@@ -112,6 +123,11 @@ async def execute_audit(
         "forensics": {
             "box_count": box_count,
             "regions": merged_regions,
+            "face": {
+                "detected": face_res["face_detected"],
+                "swap_score": face_res["swap_score"],
+                "anomaly_detected": face_res["anomaly_detected"]
+            },
             "ela_variance": ela_res.get("ela_variance", 0.0),
             "texture_variance": texture_res.get("mean_variance", 0.0),
             "moire": moire_res
@@ -129,7 +145,8 @@ async def execute_audit(
         "images": {
             "orig_b64": f"data:image/png;base64,{pil_to_b64(orig_pil)}",
             "annotated_b64": f"data:image/png;base64,{mat_to_b64(annotated)}",
-            "ela_b64": f"data:image/png;base64,{pil_to_b64(ela_res.get('ela_enhanced', orig_pil))}"
+            "ela_b64": f"data:image/png;base64,{pil_to_b64(ela_res.get('ela_enhanced', orig_pil))}",
+            "face_b64": f"data:image/png;base64,{mat_to_b64(face_res['face_crop'])}" if face_res["face_detected"] else None
         }
     }
 

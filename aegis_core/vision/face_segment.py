@@ -2,17 +2,24 @@ import cv2
 import numpy as np
 
 class BiometricPortraitAnalyzer:
-    """Isolates facial portraits and audits border continuity for photo-replacement indicators."""
+    """Isolates facial portraits and audits boundary continuity for photo-replacement/swap signatures."""
 
-    @staticmethod
-    def extract_and_audit(img_cv: np.ndarray) -> dict:
+    @classmethod
+    def extract_and_audit(cls, img_cv: np.ndarray) -> dict:
         if img_cv is None or img_cv.size == 0:
-            return {"face_detected": False, "face_crop": None, "photo_swap_score": 0.0, "bbox": None}
+            return {
+                "face_detected": False,
+                "face_crop": None,
+                "bbox": None,
+                "swap_score": 0.0,
+                "anomaly_detected": False,
+                "tamper_zone": None
+            }
 
         gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY) if len(img_cv.shape) == 3 else img_cv
         h_img, w_img = gray.shape[:2]
 
-        # Fail-safe built-in Haar Cascade detector
+        # Fail-safe built-in OpenCV Haar Cascade detector
         face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
         faces = face_cascade.detectMultiScale(
             gray,
@@ -25,45 +32,53 @@ class BiometricPortraitAnalyzer:
             return {
                 "face_detected": False,
                 "face_crop": None,
-                "photo_swap_score": 0.0,
+                "bbox": None,
+                "swap_score": 0.0,
                 "anomaly_detected": False,
-                "bbox": None
+                "tamper_zone": None
             }
 
-        # Select primary face candidate
+        # Select the dominant face candidate
         fx, fy, fw, fh = max(faces, key=lambda b: b[2] * b[3])
-        
-        # Standardized portrait padding
-        pad_x = int(fw * 0.20)
-        pad_y = int(fh * 0.28)
+
+        # Standardized biometric portrait padding
+        pad_x = int(fw * 0.22)
+        pad_y = int(fh * 0.30)
         x1 = max(0, fx - pad_x)
         y1 = max(0, fy - pad_y)
         x2 = min(w_img, fx + fw + pad_x)
         y2 = min(h_img, fy + fh + pad_y)
 
-        cropped_face = img_cv[y1:y2, x1:x2].copy()
+        face_crop = img_cv[y1:y2, x1:x2].copy()
 
-        # Phase 18: Photo-Swap Boundary Continuity Audit
-        # Evaluates gradient jump and noise differential along the portrait boundary perimeter
-        boundary_pad = 3
-        bx1, by1 = max(0, x1 - boundary_pad), max(0, y1 - boundary_pad)
-        bx2, by2 = min(w_img, x2 + boundary_pad), min(h_img, y2 + boundary_pad)
-        perimeter_outer = gray[by1:by2, bx1:bx2]
-        
-        # Sobel edge gradient across the perimeter
-        sobel_x = cv2.Sobel(perimeter_outer, cv2.CV_64F, 1, 0, ksize=3)
-        sobel_y = cv2.Sobel(perimeter_outer, cv2.CV_64F, 0, 1, ksize=3)
+        # Audit boundary perimeter gradient step
+        # Pasted headshots create an unnatural high-frequency step boundary where toner patterns break
+        pad = 4
+        bx1, by1 = max(0, x1 - pad), max(0, y1 - pad)
+        bx2, by2 = min(w_img, x2 + pad), min(h_img, y2 + pad)
+        perimeter = gray[by1:by2, bx1:bx2]
+
+        sobel_x = cv2.Sobel(perimeter, cv2.CV_64F, 1, 0, ksize=3)
+        sobel_y = cv2.Sobel(perimeter, cv2.CV_64F, 0, 1, ksize=3)
         grad_mag = np.sqrt(sobel_x ** 2 + sobel_y ** 2)
-        mean_border_gradient = float(np.mean(grad_mag))
+        mean_border_grad = float(np.mean(grad_mag))
 
-        # Photo-swap heuristic: Pasted headshots typically create a high-contrast boundary step
-        swap_score = min(1.0, round(mean_border_gradient / 140.0, 2))
-        is_swap_anomaly = swap_score > 0.72
+        swap_score = min(1.0, round(mean_border_grad / 135.0, 2))
+        anomaly_detected = swap_score > 0.72
+
+        tamper_zone = None
+        if anomaly_detected:
+            tamper_zone = {
+                "bbox": [int(x1), int(y1), int(x2 - x1), int(y2 - y1)],
+                "score": round(swap_score, 2),
+                "signal": "Biometric Photo-Swap Boundary Step"
+            }
 
         return {
             "face_detected": True,
-            "face_crop": cropped_face,
+            "face_crop": face_crop,
             "bbox": [int(x1), int(y1), int(x2 - x1), int(y2 - y1)],
-            "photo_swap_score": swap_score,
-            "anomaly_detected": is_swap_anomaly
+            "swap_score": swap_score,
+            "anomaly_detected": anomaly_detected,
+            "tamper_zone": tamper_zone
         }
