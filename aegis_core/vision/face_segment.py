@@ -11,6 +11,7 @@ class BiometricPortraitAnalyzer:
                 "face_detected": False,
                 "face_crop": None,
                 "bbox": None,
+                "photo_swap_score": 0.0,
                 "swap_score": 0.0,
                 "anomaly_detected": False,
                 "tamper_zone": None
@@ -19,7 +20,6 @@ class BiometricPortraitAnalyzer:
         gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY) if len(img_cv.shape) == 3 else img_cv
         h_img, w_img = gray.shape[:2]
 
-        # Fail-safe built-in OpenCV Haar Cascade detector
         face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
         faces = face_cascade.detectMultiScale(
             gray,
@@ -33,15 +33,14 @@ class BiometricPortraitAnalyzer:
                 "face_detected": False,
                 "face_crop": None,
                 "bbox": None,
+                "photo_swap_score": 0.0,
                 "swap_score": 0.0,
                 "anomaly_detected": False,
                 "tamper_zone": None
             }
 
-        # Select the dominant face candidate
         fx, fy, fw, fh = max(faces, key=lambda b: b[2] * b[3])
 
-        # Standardized biometric portrait padding
         pad_x = int(fw * 0.22)
         pad_y = int(fh * 0.30)
         x1 = max(0, fx - pad_x)
@@ -51,8 +50,7 @@ class BiometricPortraitAnalyzer:
 
         face_crop = img_cv[y1:y2, x1:x2].copy()
 
-        # Audit boundary perimeter gradient step
-        # Pasted headshots create an unnatural high-frequency step boundary where toner patterns break
+        # Boundary perimeter gradient step
         pad = 4
         bx1, by1 = max(0, x1 - pad), max(0, y1 - pad)
         bx2, by2 = min(w_img, x2 + pad), min(h_img, y2 + pad)
@@ -78,6 +76,7 @@ class BiometricPortraitAnalyzer:
             "face_detected": True,
             "face_crop": face_crop,
             "bbox": [int(x1), int(y1), int(x2 - x1), int(y2 - y1)],
+            "photo_swap_score": swap_score,
             "swap_score": swap_score,
             "anomaly_detected": anomaly_detected,
             "tamper_zone": tamper_zone
