@@ -55,7 +55,7 @@
       </div>
 
       <div class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
-        <!-- 1. Document File Upload -->
+        <!-- Document Upload -->
         <div class="md:col-span-2">
           <label for="doc-upload" class="border-2 border-dashed border-slate-700 hover:border-cyan-500/60 rounded-xl p-3.5 flex items-center justify-center gap-3 cursor-pointer transition bg-slate-950/40">
             <input type="file" id="doc-upload" class="hidden" accept="image/*" />
@@ -69,27 +69,69 @@
           </label>
         </div>
 
-        <!-- 2. NEW: Live Selfie / Face Upload -->
+        <!-- Live Selfie Upload with Instant Thumbnail Preview -->
         <div>
-          <label for="selfie-upload" class="border-2 border-dashed border-slate-700 hover:border-blue-500/60 rounded-xl p-3.5 flex items-center justify-center gap-3 cursor-pointer transition bg-slate-950/40">
-            <input type="file" id="selfie-upload" class="hidden" accept="image/*" capture="user" />
-            <div class="w-8 h-8 rounded-lg bg-blue-500/10 text-blue-400 flex items-center justify-center">
+          <label for="selfie-upload" class="border-2 border-dashed border-slate-700 hover:border-blue-500/60 rounded-xl p-3.5 flex items-center justify-center gap-3 cursor-pointer transition bg-slate-950/40 relative overflow-hidden">
+            <input type="file" id="selfie-upload" class="hidden" accept="image/*" />
+            <div id="selfie-icon-wrap" class="w-8 h-8 rounded-lg bg-blue-500/10 text-blue-400 flex items-center justify-center shrink-0">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/><circle cx="12" cy="13" r="4"/></svg>
             </div>
+            <img id="selfie-preview-thumb" class="w-8 h-8 rounded-lg object-cover border border-blue-400 hidden shrink-0" />
             <div class="text-left overflow-hidden">
               <span id="selfie-name-label" class="text-xs font-semibold text-slate-300 block truncate">Live Selfie (Optional)</span>
-              <span class="text-[10px] text-slate-500 block">1:1 Biometric Face Match</span>
+              <span id="selfie-sub-label" class="text-[10px] text-slate-500 block">1:1 Biometric Face Match</span>
             </div>
           </label>
         </div>
 
-        <!-- 3. Form Inputs & Audit Button -->
+        <!-- Inputs & Audit Button -->
         <div class="space-y-2">
           <input type="text" id="id-input" placeholder="ID Number (e.g. 12-digit UID for Dihedral D5)" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-cyan-500 mono" />
           <input type="text" id="mrz-input" placeholder="MRZ String (Optional ICAO Doc 9303)" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-cyan-500 mono" />
           <button id="run-audit-btn" class="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold py-2 rounded-xl text-xs uppercase tracking-wider shadow-lg shadow-cyan-500/20 transition disabled:opacity-40" disabled>
             Execute Forensic Inspection
           </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- NEW: Dedicated Biometric 1:1 Live Face Match Display Card -->
+    <div id="biometric-match-card" class="hidden bg-[#0e1628] border border-blue-900/60 rounded-2xl p-4 shadow-xl space-y-3">
+      <div class="flex items-center justify-between pb-2 border-b border-slate-800">
+        <div class="flex items-center gap-2">
+          <div class="w-2.5 h-2.5 rounded-full bg-blue-400 animate-pulse"></div>
+          <span class="text-xs font-bold uppercase tracking-wider text-blue-300">1:1 Facial Biometric Verification Result</span>
+        </div>
+        <span id="bio-status-badge" class="text-[10px] font-bold px-2.5 py-1 rounded mono">--</span>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+        <!-- Card Document Portrait -->
+        <div class="flex items-center gap-3 bg-slate-950/60 p-3 rounded-xl border border-slate-800/80">
+          <img id="bio-card-face" class="w-16 h-16 rounded-xl object-cover bg-slate-900 border border-slate-700" />
+          <div>
+            <span class="text-[10px] uppercase font-bold text-slate-400 block">Extracted Portrait</span>
+            <span class="text-xs font-semibold text-slate-200">Document Canvas</span>
+          </div>
+        </div>
+
+        <!-- Match Vector Metrics -->
+        <div class="text-center space-y-1.5 px-2">
+          <span class="text-[10px] uppercase font-bold text-slate-400">Multi-Space Similarity Index</span>
+          <div id="bio-score-text" class="text-xl font-extrabold text-blue-400 mono">--%</div>
+          <div class="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
+            <div id="bio-score-bar" class="h-full bg-blue-500 transition-all duration-500" style="width: 0%"></div>
+          </div>
+          <span id="bio-score-desc" class="text-[10px] text-slate-400 block">--</span>
+        </div>
+
+        <!-- Live Captured Selfie -->
+        <div class="flex items-center gap-3 bg-slate-950/60 p-3 rounded-xl border border-slate-800/80">
+          <img id="bio-live-face" class="w-16 h-16 rounded-xl object-cover bg-slate-900 border border-slate-700" />
+          <div>
+            <span class="text-[10px] uppercase font-bold text-slate-400 block">Live Captured Selfie</span>
+            <span class="text-xs font-semibold text-slate-200">Camera Feed</span>
+          </div>
         </div>
       </div>
     </div>
@@ -264,6 +306,10 @@
     const runBtn = document.getElementById('run-audit-btn');
     const fileLabel = document.getElementById('file-name-label');
     const selfieLabel = document.getElementById('selfie-name-label');
+    const selfieSubLabel = document.getElementById('selfie-sub-label');
+    const selfieIconWrap = document.getElementById('selfie-icon-wrap');
+    const selfiePreviewThumb = document.getElementById('selfie-preview-thumb');
+
     const splitRange = document.getElementById('split-range');
     const viewOverlayWrap = document.getElementById('view-overlay-wrap');
     const viewOverlay = document.getElementById('view-overlay');
@@ -282,10 +328,20 @@
       }
     };
 
+    // Instant Form Preview when photo is taken or selected
     selfieUploader.onchange = (e) => {
       selectedSelfie = e.target.files[0];
       if (selectedSelfie) {
-        selfieLabel.innerText = "Selfie: " + selectedSelfie.name;
+        selfieLabel.innerText = "Selfie Ready ✓";
+        selfieSubLabel.innerText = selectedSelfie.name;
+
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          selfiePreviewThumb.src = ev.target.result;
+          selfiePreviewThumb.classList.remove('hidden');
+          selfieIconWrap.classList.add('hidden');
+        };
+        reader.readAsDataURL(selectedSelfie);
       }
     };
 
@@ -375,6 +431,7 @@
         clsBadge.classList.remove('hidden');
       }
 
+      // Checklists
       setBadge('chk-quality', res.quality?.passed, "Passed", "Poor Quality");
       setBadge('chk-moire', !res.forensics?.moire?.is_screen_recapture, "Natural", "Screen Spoof");
       setBadge('chk-tamper', (res.forensics?.box_count || 0) === 0, "Intact", (res.forensics?.box_count || 0) + " Alteration(s)");
@@ -391,12 +448,35 @@
         el.innerText = "Not Provided";
       }
 
-      // Live Selfie Checklist Indicator
+      // Live Selfie Biometric Card & Checklist
       const liveFaceData = res.deterministic?.live_face_verification;
+      const bioCard = document.getElementById('biometric-match-card');
       const chkLive = document.getElementById('chk-live-face');
+
       if (liveFaceData && liveFaceData.evaluated) {
-        setBadge('chk-live-face', liveFaceData.is_match, "Matched (" + Math.round(liveFaceData.similarity_score * 100) + "%)", "Mismatch");
+        bioCard.classList.remove('hidden');
+        document.getElementById('bio-card-face').src = res.images?.face_b64 || "";
+        document.getElementById('bio-live-face').src = res.images?.live_face_b64 || "";
+
+        const pct = Math.round((liveFaceData.similarity_score || 0) * 100);
+        document.getElementById('bio-score-text').innerText = pct + "%";
+        document.getElementById('bio-score-bar').style.width = pct + "%";
+        document.getElementById('bio-score-desc').innerText = liveFaceData.detail || "";
+
+        const statusBadge = document.getElementById('bio-status-badge');
+        if (liveFaceData.is_match) {
+          statusBadge.className = "text-[10px] font-bold px-2.5 py-1 rounded mono bg-emerald-500/20 text-emerald-400 border border-emerald-500/40";
+          statusBadge.innerText = "BIOMETRIC CONFIRMED";
+          document.getElementById('bio-score-bar').className = "h-full bg-emerald-500 transition-all duration-500";
+          setBadge('chk-live-face', true, "Matched (" + pct + "%)", "Mismatch");
+        } else {
+          statusBadge.className = "text-[10px] font-bold px-2.5 py-1 rounded mono bg-red-500/20 text-red-400 border border-red-500/40";
+          statusBadge.innerText = "MISMATCH DETECTED";
+          document.getElementById('bio-score-bar').className = "h-full bg-red-500 transition-all duration-500";
+          setBadge('chk-live-face', false, "Matched (" + pct + "%)", "Mismatch (" + pct + "%)");
+        }
       } else {
+        bioCard.classList.add('hidden');
         chkLive.className = "text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400";
         chkLive.innerText = "Not Provided";
       }

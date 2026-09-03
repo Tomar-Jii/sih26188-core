@@ -1,5 +1,7 @@
 import cv2
 import numpy as np
+from PIL import Image, ImageOps
+import io
 
 class BiometricFaceMatcher:
     """Compares card canvas portrait against cryptographically signed QR avatar and live captured selfies."""
@@ -48,7 +50,6 @@ class BiometricFaceMatcher:
 
     @classmethod
     def compare_portraits(cls, card_face_cv: np.ndarray, qr_photo_bytes: bytes) -> dict:
-        """Existing Feature: Compares card portrait against QR avatar bytes."""
         default_res = {
             "evaluated": False,
             "match_status": "SKIPPED_NO_AVATAR",
@@ -93,7 +94,6 @@ class BiometricFaceMatcher:
 
     @classmethod
     def compare_live_face(cls, card_face_cv: np.ndarray, live_img_cv: np.ndarray) -> dict:
-        """New Feature: Extracts face from a live camera capture/selfie and compares with card photo."""
         default_res = {
             "evaluated": False,
             "live_face_detected": False,
@@ -111,38 +111,42 @@ class BiometricFaceMatcher:
             live_gray = cv2.cvtColor(live_img_cv, cv2.COLOR_BGR2GRAY) if len(live_img_cv.shape) == 3 else live_img_cv
             h_l, w_l = live_gray.shape[:2]
 
-            # Detect face in live image
             faces = []
             if hasattr(cv2, 'CascadeClassifier') and hasattr(cv2, 'data') and hasattr(cv2.data, 'haarcascades'):
                 try:
                     cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
                     face_cascade = cv2.CascadeClassifier(cascade_path)
                     if not face_cascade.empty():
-                        detected = face_cascade.detectMultiScale(live_gray, scaleFactor=1.1, minNeighbors=4, minSize=(60, 60))
+                        detected = face_cascade.detectMultiScale(live_gray, scaleFactor=1.1, minNeighbors=3, minSize=(50, 50))
                         if len(detected) > 0:
                             faces = detected
                 except Exception:
                     pass
 
             if len(faces) == 0:
-                # Fallback: Central bounding crop for selfies
+                # Central crop fallback for close-up phone selfies
+                box_sz = int(min(w_l, h_l) * 0.70)
                 cx, cy = w_l // 2, h_l // 2
-                box_sz = int(min(w_l, h_l) * 0.55)
-                live_crop = live_img_cv[max(0, cy - box_sz//2):min(h_l, cy + box_sz//2),
-                                        max(0, cx - box_sz//2):min(w_l, cx + box_sz//2)]
+                x1 = max(0, cx - box_sz // 2)
+                y1 = max(0, cy - box_sz // 2)
+                x2 = min(w_l, x1 + box_sz)
+                y2 = min(h_l, y1 + box_sz)
+                live_crop = live_img_cv[y1:y2, x1:x2].copy()
             else:
                 fx, fy, fw, fh = max(faces, key=lambda b: b[2] * b[3])
                 pad_x = int(fw * 0.15)
                 pad_y = int(fh * 0.20)
-                y1, y2 = max(0, fy - pad_y), min(h_l, fy + fh + pad_y)
-                x1, x2 = max(0, fx - pad_x), min(w_l, fx + fw + pad_x)
-                live_crop = live_img_cv[y1:y2, x1:x2]
+                x1 = max(0, fx - pad_x)
+                y1 = max(0, fy - pad_y)
+                x2 = min(w_l, fx + fw + pad_x)
+                y2 = min(h_l, fy + fh + pad_y)
+                live_crop = live_img_cv[y1:y2, x1:x2].copy()
 
             c_face = cls._preprocess(card_face_cv)
             l_face = cls._preprocess(live_crop)
 
             sim_score = cls._compute_similarity(c_face, l_face)
-            is_match = sim_score >= 0.42
+            is_match = sim_score >= 0.38
             match_status = "LIVE_FACE_MATCHED" if is_match else "LIVE_FACE_MISMATCH"
 
             return {

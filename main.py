@@ -4,7 +4,7 @@ import cv2
 import hashlib
 import traceback
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 from fastapi import FastAPI, File, UploadFile, Form, Request, HTTPException, status
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
@@ -65,13 +65,15 @@ async def execute_audit(
     except Exception as exc:
         return JSONResponse(status_code=400, content={"detail": f"Stream ingestion fault: {str(exc)}"})
 
-    # Optional Live Face Capture Ingestion
+    # Mobile Upright EXIF Transpose for Live Face
     live_cv = None
     if live_face is not None and live_face.filename:
         try:
             live_bytes = await live_face.read()
             if len(live_bytes) > 0:
-                live_cv = cv2.imdecode(np.frombuffer(live_bytes, np.uint8), cv2.IMREAD_COLOR)
+                live_pil = Image.open(io.BytesIO(live_bytes))
+                live_pil = ImageOps.exif_transpose(live_pil).convert("RGB")
+                live_cv = cv2.cvtColor(np.array(live_pil), cv2.COLOR_RGB2BGR)
         except Exception:
             live_cv = None
 
@@ -127,13 +129,13 @@ async def execute_audit(
                 log_status = "PASS" if not face_match_res.get("is_photo_swap") else "FLAGGED"
                 trail.log(f"Biometric Avatar Audit: {face_match_res['match_status']} (Corr: {int(face_match_res['similarity_score']*100)}%)", log_status)
 
-        # 8. NEW: Live Selfie Face Match (Card Photo vs User Camera)
-        live_match_res = {"evaluated": False, "match_status": "SKIPPED", "similarity_score": 0.0, "is_match": True}
+        # 8. Live Selfie Face Match (Card Photo vs Upright User Camera)
+        live_match_res = {"evaluated": False, "match_status": "SKIPPED", "similarity_score": 0.0, "is_match": True, "live_face_crop": None}
         if live_cv is not None and face_res.get("face_detected"):
             live_match_res = BiometricFaceMatcher.compare_live_face(face_res["face_crop"], live_cv)
             if live_match_res.get("evaluated"):
                 log_status = "PASS" if live_match_res.get("is_match") else "FLAGGED"
-                trail.log(f"Live Face Verification: {live_match_res['match_status']} ({int(live_match_res['similarity_score']*100)}% Similarity)", log_status)
+                trail.log(f"Live 1:1 Face Verification: {live_match_res['match_status']} ({int(live_match_res['similarity_score']*100)}% Similarity)", log_status)
 
         # 9. Forensic Defacement & Spatial Scanners
         texture_res = TextureFlatnessAnalyzer.detect_digital_strokes(warped_cv, qr_bbox=qr_res.get("bbox"), qr_bboxes=all_qr_boxes)
@@ -205,6 +207,9 @@ async def execute_audit(
             metadata_summary=meta_res
         )
 
+        card_face_crop_b64 = mat_to_b64(face_res['face_crop']) if face_res.get("face_detected") else None
+        live_face_crop_b64 = mat_to_b64(live_match_res['live_face_crop']) if (live_match_res.get("evaluated") and live_match_res.get("live_face_crop") is not None) else None
+
         response = {
             "version": CONFIG.APP_VERSION,
             "case_id": trail.case_id,
@@ -246,8 +251,8 @@ async def execute_audit(
                 "orig_b64": f"data:image/png;base64,{mat_to_b64(warped_cv)}",
                 "annotated_b64": f"data:image/png;base64,{mat_to_b64(annotated)}",
                 "ela_b64": f"data:image/png;base64,{pil_to_b64(ela_res.get('ela_enhanced', orig_pil))}",
-                "face_b64": f"data:image/png;base64,{mat_to_b64(face_res['face_crop'])}" if face_res.get("face_detected") else None,
-                "live_face_b64": f"data:image/png;base64,{mat_to_b64(live_match_res['live_face_crop'])}" if live_match_res.get("evaluated") and live_match_res.get("live_face_crop") is not None else None
+                "face_b64": f"data:image/png;base64,{card_face_crop_b64}" if card_face_crop_b64 else None,
+                "live_face_b64": f"data:image/png;base64,{live_face_crop_b64}" if live_face_crop_b64 else None
             }
         }
 
