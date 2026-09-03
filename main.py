@@ -153,7 +153,7 @@ async def execute_audit(
                 "signal": c.get("signal", "Spatial Anomaly")
             })
 
-        merged_regions = SpatialRegionMerger.merge_regions(normalized_candidates, iou_threshold=0.20) if hasattr(SpatialRegionMerger, "merge_regions") else []
+        merged_regions = SpatialRegionMerger.merge_regions(normalized_candidates, iou_thresh=0.20) if hasattr(SpatialRegionMerger, "merge_regions") else []
         box_count = len(merged_regions)
         trail.log(f"Spatial Fusion (NMS): {box_count} Consolidated Tamper Zone(s)", "FLAGGED" if box_count > 0 else "PASS")
 

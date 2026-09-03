@@ -19,14 +19,13 @@ class SpatialRegionMerger:
 
         areaA = boxA[2] * boxA[3]
         areaB = boxB[2] * boxB[3]
-        return inter_area / float(areaA + areaB - inter_area)
+        denom = float(areaA + areaB - inter_area)
+        return inter_area / denom if denom > 0 else 0.0
 
     @staticmethod
-    def is_nearby(boxA: list, boxB: list, max_distance: int = 10) -> bool:
+    def is_nearby(boxA: list, boxB: list, max_distance: int = 12) -> bool:
         """Checks if two broken stroke segments are within close proximity."""
-        # Box A bounds
         a_x1, a_y1, a_x2, a_y2 = boxA[0], boxA[1], boxA[0] + boxA[2], boxA[1] + boxA[3]
-        # Box B bounds
         b_x1, b_y1, b_x2, b_y2 = boxB[0], boxB[1], boxB[0] + boxB[2], boxB[1] + boxB[3]
 
         x_dist = max(0, max(a_x1, b_x1) - min(a_x2, b_x2))
@@ -35,11 +34,14 @@ class SpatialRegionMerger:
         return x_dist <= max_distance and y_dist <= max_distance
 
     @classmethod
-    def merge_regions(cls, raw_regions: list, iou_thresh: float = 0.18, max_dist: int = 10) -> list:
+    def merge_regions(cls, raw_regions: list, iou_thresh: float = 0.18, max_dist: int = 12, **kwargs) -> list:
+        # Flexible argument resolution for both naming conventions
+        thresh = kwargs.get("iou_threshold", kwargs.get("iou_thresh", iou_thresh))
+        dist = kwargs.get("max_distance", kwargs.get("max_dist", max_dist))
+
         if not raw_regions:
             return []
 
-        # Sort candidate regions by area descending
         sorted_zones = sorted(raw_regions, key=lambda z: z["bbox"][2] * z["bbox"][3], reverse=True)
         merged = []
 
@@ -50,14 +52,13 @@ class SpatialRegionMerger:
 
             for other in sorted_zones:
                 iou = cls.compute_iou(current["bbox"], other["bbox"])
-                nearby = cls.is_nearby(current["bbox"], other["bbox"], max_distance=max_dist)
+                nearby = cls.is_nearby(current["bbox"], other["bbox"], max_distance=dist)
 
-                if iou > iou_thresh or nearby:
+                if iou > thresh or nearby:
                     cluster.append(other)
                 else:
                     remaining.append(other)
 
-            # Compute bounding hull for the entire cluster
             all_boxes = [z["bbox"] for z in cluster]
             x_min = min(b[0] for b in all_boxes)
             y_min = min(b[1] for b in all_boxes)
@@ -67,13 +68,13 @@ class SpatialRegionMerger:
             signals = list(set([z.get("signal", "Spatial Anomaly") for z in cluster]))
             is_multi_confirmed = len(signals) > 1
 
-            # Base score amplified if verified by multiple distinct analytical signals
             base_score = max(z.get("score", 0.85) for z in cluster)
             final_score = min(0.98, base_score + (0.08 if is_multi_confirmed else 0.0))
 
             merged.append({
                 "region_id": f"ZONE_{len(merged) + 1}",
                 "bbox": [int(x_min), int(y_min), int(x_max - x_min), int(y_max - y_min)],
+                "score": round(final_score, 2),
                 "anomaly_score": round(final_score, 2),
                 "signals": signals,
                 "multi_signal_verified": is_multi_confirmed
