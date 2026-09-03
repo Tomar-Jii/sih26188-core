@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AegisID // Forensic Intelligence Screening Engine (SSB / MHA)</title>
+  <title>AegisID // Forensic Screening Workstation</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -29,14 +29,15 @@
         <h1 class="text-sm md:text-base font-bold tracking-tight text-white flex items-center gap-2">
           AegisID <span class="text-[10px] uppercase font-semibold bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 px-2 py-0.5 rounded mono">Forensic Core v4.2</span>
         </h1>
-        <p class="text-[10px] text-slate-400">SIH26188 // Sashastra Seema Bal, Police II Div (MHA)</p>
+        <p class="text-[10px] text-slate-400">SIH26188 // Automated forensic screening assistance</p>
       </div>
     </div>
     <div class="flex items-center gap-3">
       <button id="btn-print" onclick="window.print()" class="hidden md:flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-slate-700 text-xs font-semibold px-3 py-1.5 rounded-lg transition disabled:opacity-40" disabled>
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/></svg>
-        Export BSA 65B Dossier
+        Export Screening Report
       </button>
+      <span id="system-state" class="text-[10px] font-semibold text-cyan-300 border border-cyan-500/30 bg-cyan-500/10 px-2 py-0.5 rounded mono">STATE: READY</span>
       <span class="text-xs font-semibold text-emerald-400 flex items-center gap-1.5 mono">
         <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span> ONLINE
       </span>
@@ -227,13 +228,13 @@
     </div>
   </main>
 
-  <!-- Legal Dossier Print Section (BSA 2023 / Section 65B Compliant) -->
+  <!-- Printable Screening Report -->
   <div id="print-dossier" class="hidden bg-white text-black p-10 max-w-4xl mx-auto space-y-6">
     <div class="border-b-2 border-black pb-4 flex justify-between items-start">
       <div>
-        <h1 class="text-xl font-black uppercase">Government of India // Ministry of Home Affairs</h1>
-        <p class="text-xs font-bold text-gray-700">Digital Identity Document Screening & Tampering Audit Report</p>
-        <p class="text-[10px] text-gray-600">Electronic Evidence Admissible under Section 63 & 65B of Bharatiya Sakshya Adhiniyam, 2023</p>
+        <h1 class="text-xl font-black uppercase">AegisID Automated Forensic Screening Report</h1>
+        <p class="text-xs font-bold text-gray-700">Digital identity document anomaly screening summary</p>
+        <p class="text-[10px] text-gray-600">This output is an automated screening aid and requires trained human review.</p>
       </div>
       <div class="text-right">
         <span id="dos-case-id" class="text-xs font-mono font-bold border border-black px-2 py-1">CASE: --</span>
@@ -242,6 +243,7 @@
 
     <div class="grid grid-cols-2 gap-3 text-xs font-mono border-b border-gray-300 pb-3">
       <div><strong>Audit Timestamp:</strong> <span id="dos-time">--</span></div>
+      <div><strong>Backend Version:</strong> <span id="dos-version">--</span></div>
       <div><strong>System Verdict:</strong> <span id="dos-verdict">--</span></div>
       <div class="col-span-2 break-all"><strong>Evidence SHA-256:</strong> <span id="dos-sha">--</span></div>
       <div><strong>Quality Assessment:</strong> <span id="dos-quality">--</span></div>
@@ -258,9 +260,9 @@
     </div>
 
     <div class="border-t border-black pt-3 text-[10px] text-gray-600 space-y-1">
-      <p><strong>Section 65B Attestation:</strong> This document represents an automated diagnostic assessment produced by the AegisID Computer Vision Engine via mathematical Fourier frequency analysis, Adaptive Error Level Difference calculation, and deterministic checksum matrices. It is submitted as investigative assistance and does not supersede authorized physical laboratory verification.</p>
+      <p><strong>Limitations:</strong> Signal anomalies may arise from benign capture conditions, recompression, or metadata transformations. This report does not prove authenticity or forgery and should be treated as screening assistance only.</p>
       <div class="pt-6 flex justify-between">
-        <span>Screening System ID: <strong>AEGIS-SSB-CORE-01</strong></span>
+        <span>Screening System ID: <strong>AEGIS-SCREEN-CORE-01</strong></span>
         <span>Investigator Stamp / Signature: _______________________</span>
       </div>
     </div>
@@ -281,6 +283,20 @@
     const stagePlaceholder = document.getElementById('stage-placeholder');
     const sliderStage = document.getElementById('viewer-stage');
     const sliderCtrl = document.getElementById('slider-ctrl');
+    const systemStateEl = document.getElementById('system-state');
+
+    function setSystemState(state) {
+      systemStateEl.innerText = `STATE: ${state}`;
+      if (state === "ANALYZING") {
+        systemStateEl.className = "text-[10px] font-semibold text-amber-300 border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 rounded mono";
+      } else if (state === "COMPLETED") {
+        systemStateEl.className = "text-[10px] font-semibold text-emerald-300 border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 rounded mono";
+      } else if (state === "ERROR") {
+        systemStateEl.className = "text-[10px] font-semibold text-red-300 border border-red-500/30 bg-red-500/10 px-2 py-0.5 rounded mono";
+      } else {
+        systemStateEl.className = "text-[10px] font-semibold text-cyan-300 border border-cyan-500/30 bg-cyan-500/10 px-2 py-0.5 rounded mono";
+      }
+    }
 
     uploader.onchange = (e) => {
       selectedFile = e.target.files[0];
@@ -298,16 +314,23 @@
       if (!selectedFile) return;
       runBtn.disabled = true;
       runBtn.innerText = "AUDITING FORENSIC SIGNALS...";
+      setSystemState("ANALYZING");
 
       const formData = new FormData();
       formData.append("file", selectedFile);
       formData.append("mrz_raw_input", document.getElementById('mrz-input').value);
 
       try {
-        const res = await (await fetch('/api/audit', { method: 'POST', body: formData })).json();
+        const response = await fetch('/api/audit', { method: 'POST', body: formData });
+        const res = await response.json();
+        if (!response.ok || res.error) {
+          throw new Error((res.error && res.error.message) ? res.error.message : "Pipeline execution failed.");
+        }
         renderAuditResults(res);
+        setSystemState(res.system_state || "COMPLETED");
       } catch (err) {
-        alert("Pipeline error during execution.");
+        setSystemState("ERROR");
+        alert(err.message || "Pipeline error during execution.");
       }
       runBtn.disabled = false;
       runBtn.innerText = "Execute Forensic Inspection";
@@ -389,6 +412,7 @@
       // Populate Dossier
       document.getElementById('dos-case-id').innerText = "CASE: " + res.case_id;
       document.getElementById('dos-time').innerText = res.timestamp;
+      document.getElementById('dos-version').innerText = res.backend_version || "unknown";
       document.getElementById('dos-verdict').innerText = res.risk.verdict + " (" + res.risk.risk_score + "/100)";
       document.getElementById('dos-sha').innerText = res.sha256;
       document.getElementById('dos-quality').innerText = res.quality.metrics.blur_status + " (" + res.quality.metrics.resolution + ")";
