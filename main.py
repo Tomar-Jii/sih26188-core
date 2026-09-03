@@ -1,37 +1,35 @@
 import io
+import uuid
 import base64
 import cv2
 import numpy as np
+from datetime import datetime, timezone
 from PIL import Image
 from fastapi import FastAPI, File, UploadFile, Form, Request, HTTPException, status
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
-from aegis_core.config import CONFIG
-from aegis_core.quality.gatekeeper import DocumentQualityGate
-from aegis_core.vision.warp import DocumentPerspectiveWarper
-from aegis_core.vision.face_segment import BiometricPortraitAnalyzer
-from aegis_core.validators.dihedral import VerhoeffDihedralValidator
-from aegis_core.validators.mrz_td3 import ICAO9303MRZParser
-from aegis_core.validators.qr_engine import MultiPassQREngine
-from aegis_core.forensics.ela import DifferentialELAAnalyzer
-from aegis_core.forensics.noise import LocalNoiseAnalyzer
-from aegis_core.forensics.texture import TextureFlatnessAnalyzer
-from aegis_core.forensics.gradient import EdgeDiscontinuityAnalyzer
-from aegis_core.forensics.moire import OpticalMoireAnalyzer
-from aegis_core.forensics.metadata import MetadataFootprintAnalyzer
-from aegis_core.fusion.cross_field import CrossFieldConsistencyEngine
-from aegis_core.fusion.cluster import SpatialRegionMerger
-from aegis_core.fusion.risk_engine import MultiSignalRiskEngine
-from aegis_core.fusion.abstention import ConfidenceAbstentionGate
-from aegis_core.timeline.audit_trail import ForensicAuditTrail, EphemeralCaseLedger
-from aegis_core.reporting.bsa_dossier import BSADossierBuilder
+from forensics import (
+    ICAO9303Validator,
+    DocumentQualityEngine,
+    MultiSignalForensics,
+    RiskFusionEngine
+)
+
+APP_VERSION = "4.2.2-resilient"
+MAX_FILE_SIZE = 25 * 1024 * 1024  # 25 MB limit for high-res camera captures
+ALLOWED_MIME_TYPES = {
+    "image/jpeg", "image/jpg", "image/png", "image/webp", 
+    "image/bmp", "image/pjpeg", "image/x-png", "application/octet-stream"
+}
 
 app = FastAPI(
-    title="AegisID - Defense Forensic Screener (SSB/MHA)",
-    version=CONFIG.APP_VERSION
+    title="AegisID - Defense Grade Forensic Screener (SSB/MHA)",
+    version=APP_VERSION
 )
 templates = Jinja2Templates(directory="templates")
+
+CASE_REGISTRY: dict = {}
 
 def mat_to_base64(mat: np.ndarray) -> str:
     if mat is None or mat.size == 0:
@@ -52,176 +50,124 @@ async def serve_dashboard(request: Request):
 async def execute_complete_audit(
     file: UploadFile = File(...),
     case_id: str = Form(None),
-    id_number: str = Form(""),
     mrz_raw_input: str = Form("")
 ):
-    # 1. Ingestion Validation
-    if file.content_type not in CONFIG.ALLOWED_MIME_TYPES:
+    # 1. Flexible Content-Type validation with fallback
+    c_type = (file.content_type or "").lower()
+    if c_type and c_type not in ALLOWED_MIME_TYPES and not c_type.startswith("image/"):
         return JSONResponse(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            content={"error": "UnsupportedMediaType", "detail": f"Permitted formats: {list(CONFIG.ALLOWED_MIME_TYPES)}"}
+            content={"error": "UnsupportedMediaType", "detail": f"Uploaded type '{c_type}' is not a valid image."}
         )
 
+    # 2. File size bounds
     raw_bytes = await file.read()
     if len(raw_bytes) == 0:
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
-            content={"error": "EmptyFilePayload", "detail": "Uploaded file contains 0 bytes."}
+            content={"error": "EmptyFilePayload", "detail": "Uploaded file is 0 bytes."}
         )
-    if len(raw_bytes) > CONFIG.MAX_PAYLOAD_BYTES:
+    if len(raw_bytes) > MAX_FILE_SIZE:
         return JSONResponse(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            content={"error": "PayloadTooLarge", "detail": f"File exceeds maximum size of {CONFIG.MAX_PAYLOAD_BYTES // (1024*1024)} MB."}
+            content={"error": "PayloadTooLarge", "detail": "File exceeds 25 MB limit."}
         )
 
+    # 3. Safe image decoding
     try:
         orig_pil = Image.open(io.BytesIO(raw_bytes))
         orig_pil.load()
         rgb_pil = orig_pil.convert("RGB")
         img_cv = cv2.imdecode(np.frombuffer(raw_bytes, np.uint8), cv2.IMREAD_COLOR)
         if img_cv is None or img_cv.size == 0:
-            raise ValueError("Corrupted byte matrix")
-    except Exception:
+            raise ValueError("Corrupted raster")
+    except Exception as e:
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            content={"error": "UnprocessableImage", "detail": "Image header or pixel raster is unreadable."}
+            content={"error": "UnprocessableImage", "detail": f"Cannot decode image: {str(e)}"}
         )
 
+    # 4. Forensic execution pipeline
     try:
-        trail = ForensicAuditTrail(case_id=case_id)
-        sha256_hash = io.hashlib.sha256(raw_bytes).hexdigest() if hasattr(io, "hashlib") else __import__("hashlib").sha256(raw_bytes).hexdigest()
-        trail.log("Document Ingestion & Cryptographic Registration Completed", "VERIFIED")
+        sha256_hash = MultiSignalForensics.compute_sha256(raw_bytes)
+        timestamp_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        # 2. Quality Assessment
-        quality_eval = DocumentQualityGate.audit(img_cv)
-        trail.log(f"Pre-Screening Quality Gate: {quality_eval['metrics'].get('blur_status', 'Unknown')} Sharpness", 
-                  "PASS" if quality_eval["passed"] else "FLAGGED")
+        quality_eval = DocumentQualityEngine.assess_quality(img_cv)
+        metadata_eval = MultiSignalForensics.audit_exif_metadata(orig_pil)
+        moire_eval = MultiSignalForensics.analyze_moire_frequency(img_cv)
+        forensics_eval = MultiSignalForensics.localize_tampering_multisignal(rgb_pil, img_cv)
+        mrz_eval = ICAO9303Validator.parse_mrz(mrz_raw_input)
 
-        # 3. Perspective Homography
-        warped_cv = DocumentPerspectiveWarper.extract_and_warp(img_cv)
+        deterministic_pkg = {"mrz": mrz_eval}
+        cross_field = {"conflicts": []}
+        if mrz_eval.get("is_mrz_detected") and not mrz_eval.get("all_checks_passed"):
+            cross_field["conflicts"].append("MRZ check digit validation failed.")
 
-        # 4. QR Audit & Spatial Mask Extraction
-        qr_eval = MultiPassQREngine.inspect_and_mask(warped_cv)
-
-        # 5. Deterministic Validators
-        mrz_eval = ICAO9303MRZParser.parse(mrz_raw_input)
+        fusion_input_forensics = {
+            "box_count": forensics_eval.get("box_count", 0),
+            "ela_variance": forensics_eval.get("ela_variance", 0.0),
+            "moire": moire_eval
+        }
         
-        dihedral_valid = False
-        clean_id = id_number.replace(" ", "").strip()
-        if clean_id and len(clean_id) == 12 and clean_id.isdigit():
-            dihedral_valid = VerhoeffDihedralValidator.validate(clean_id)
-            trail.log(f"Dihedral D5 Checksum: {'PASS' if dihedral_valid else 'FAIL'}", "PASS" if dihedral_valid else "FAIL")
-
-        # 6. Multi-Signal Spatial Forensics
-        ela_eval = DifferentialELAAnalyzer.analyze(rgb_pil, warped_cv, qr_bbox=qr_eval.get("bbox"))
-        moire_eval = OpticalMoireAnalyzer.inspect(warped_cv)
-        metadata_eval = MetadataFootprintAnalyzer.inspect(orig_pil)
-        face_eval = BiometricPortraitAnalyzer.extract_and_audit(warped_cv)
-
-        # Cross-signal candidate collection
-        candidate_zones = []
-        for zone in ela_eval.get("suspicious_zones", []):
-            bbox = zone["bbox"]
-            grad_jump = EdgeDiscontinuityAnalyzer.evaluate_boundary_gradient(warped_cv, bbox)
-            flatness = TextureFlatnessAnalyzer.audit_patch_flatness(warped_cv, bbox)
-            
-            score = 0.60 + (grad_jump * 0.20) + (0.15 if flatness["is_unnaturally_flat"] else 0.0)
-            candidate_zones.append({
-                "bbox": bbox,
-                "score": min(0.96, score),
-                "signal": "Compression & Texture Discontinuity"
-            })
-
-        # NMS Spatial Clustering
-        merged_regions = SpatialRegionMerger.merge_regions(candidate_zones, iou_threshold=0.25)
-        trail.log(f"Spatial Pixel Analysis: {len(merged_regions)} Altered Region(s) Localized", 
-                  "FLAGGED" if len(merged_regions) > 0 else "PASS")
-
-        # 7. Cross-Field Consistency
-        cross_field_eval = CrossFieldConsistencyEngine.audit_consistency(
-            ocr_fields={"doc_number": clean_id},
-            mrz_data=mrz_eval,
-            qr_data=qr_eval
+        fusion_decision = RiskFusionEngine.evaluate(
+            quality=quality_eval,
+            deterministic=deterministic_pkg,
+            forensics=fusion_input_forensics,
+            metadata=metadata_eval,
+            cross_field=cross_field
         )
 
-        # 8. Risk Fusion & Abstention
-        risk_data = MultiSignalRiskEngine.compute_risk(
-            quality_result=quality_eval,
-            mrz_result=mrz_eval,
-            dihedral_valid=dihedral_valid,
-            id_number_present=bool(clean_id),
-            moire_result=moire_eval,
-            merged_regions=merged_regions,
-            metadata_result=metadata_eval,
-            photo_swap_result=face_eval,
-            cross_field_result=cross_field_eval
-        )
+        q_metrics = quality_eval.get("metrics", {})
+        blur_txt = q_metrics.get("blur_status", "Normal")
+        res_txt = q_metrics.get("resolution", "Standard")
 
-        final_verdict = ConfidenceAbstentionGate.evaluate(quality_eval, merged_regions, risk_data)
-        trail.log(f"Risk Fusion Synthesis: {final_verdict['risk_score']}/100 ({final_verdict['risk_level']})", "COMPLETED")
+        timeline = [
+            {"time": timestamp_iso, "event": "Document Ingested & SHA-256 Registered", "status": "VERIFIED"},
+            {"time": timestamp_iso, "event": f"Quality Gate: {blur_txt} ({res_txt})", "status": "PASS" if quality_eval.get("passed") else "FLAGGED"},
+            {"time": timestamp_iso, "event": f"Optical Frequency Moiré: PAPR {moire_eval.get('papr_score', 1.0)}", "status": "SUSPICIOUS" if moire_eval.get("is_screen_recapture") else "PASS"},
+            {"time": timestamp_iso, "event": f"Pixel Compression Analysis: {forensics_eval.get('box_count', 0)} Anomalous Region(s)", "status": "FLAGGED" if forensics_eval.get("box_count", 0) > 0 else "PASS"},
+            {"time": timestamp_iso, "event": f"ICAO 9303 MRZ Engine: {'Valid' if mrz_eval.get('all_checks_passed') else ('Failed' if mrz_eval.get('is_mrz_detected') else 'Standby')}", "status": "PASS" if mrz_eval.get('all_checks_passed') else "STANDBY"},
+            {"time": timestamp_iso, "event": f"Risk Engine: Score {fusion_decision.get('risk_score', 0)}/100 ({fusion_decision.get('risk_level', 'LOW')})", "status": "COMPLETED"}
+        ]
 
-        # 9. Annotate Image
-        annotated_cv = warped_cv.copy()
-        for idx, reg in enumerate(merged_regions):
-            rx, ry, rw, rh = reg["bbox"]
-            cv2.rectangle(annotated_cv, (rx, ry), (rx + rw, ry + rh), (0, 0, 255), 2)
-            cv2.putText(annotated_cv, f"TAMPER {reg['score']}", (rx, max(ry - 4, 12)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1, cv2.LINE_AA)
+        assigned_case = case_id if case_id else f"AEG-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
 
-        # 10. Construct Section 65B Dossier
-        dossier = BSADossierBuilder.build_certificate(
-            case_id=trail.case_id,
-            sha256_hash=sha256_hash,
-            risk_decision=final_verdict,
-            quality_data=quality_eval,
-            mrz_data=mrz_eval,
-            forensic_summary={"region_count": len(merged_regions), "moire_papr": moire_eval["papr_score"]},
-            metadata_summary=metadata_eval
-        )
-
-        response_payload = {
-            "version": CONFIG.APP_VERSION,
-            "case_id": trail.case_id,
-            "timestamp": dossier["attestation_timestamp"],
+        result_payload = {
+            "version": APP_VERSION,
+            "case_id": assigned_case,
+            "timestamp": timestamp_iso,
             "sha256": sha256_hash,
             "quality": quality_eval,
-            "deterministic": {
-                "mrz": mrz_eval,
-                "dihedral_valid": dihedral_valid,
-                "qr": qr_eval
-            },
+            "deterministic": deterministic_pkg,
             "forensics": {
-                "box_count": len(merged_regions),
-                "regions": merged_regions,
-                "ela_variance": ela_eval["ela_variance"],
-                "moire": moire_eval,
-                "photo_swap": face_eval
+                "box_count": forensics_eval.get("box_count", 0),
+                "ela_variance": forensics_eval.get("ela_variance", 0.0),
+                "regions": forensics_eval.get("tamper_regions", []),
+                "moire": moire_eval
             },
             "metadata": metadata_eval,
-            "cross_field": cross_field_eval,
-            "risk": final_verdict,
-            "dossier": dossier,
-            "timeline": trail.get_timeline(),
+            "cross_field": cross_field,
+            "risk": fusion_decision,
+            "timeline": timeline,
             "images": {
                 "orig_b64": f"data:image/png;base64,{pil_to_base64(rgb_pil)}",
-                "annotated_b64": f"data:image/png;base64,{mat_to_base64(annotated_cv)}",
-                "ela_b64": f"data:image/png;base64,{pil_to_base64(ela_eval['ela_enhanced'])}",
-                "face_b64": f"data:image/png;base64,{mat_to_base64(face_eval['face_crop'])}" if face_eval["face_detected"] else None
+                "annotated_b64": f"data:image/png;base64,{mat_to_base64(forensics_eval.get('annotated_cv'))}",
+                "ela_b64": f"data:image/png;base64,{pil_to_base64(forensics_eval.get('ela_enhanced'))}"
             }
         }
 
-        EphemeralCaseLedger.register(trail.case_id, response_payload)
-        return response_payload
+        CASE_REGISTRY[assigned_case] = result_payload
+        return result_payload
 
-    except Exception as exc:
+    except Exception as err:
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"error": "PipelineExecutionFault", "detail": "An internal error occurred during forensic screening."}
+            content={"error": "InternalPipelineError", "detail": f"Forensic engine exception: {str(err)}"}
         )
 
 @app.get("/api/cases/{case_id}")
 async def fetch_case_record(case_id: str):
-    record = EphemeralCaseLedger.fetch(case_id)
+    record = CASE_REGISTRY.get(case_id)
     if not record:
-        raise HTTPException(status_code=404, detail="Case record not found in active session memory.")
+        raise HTTPException(status_code=404, detail="Case identifier not found.")
     return record

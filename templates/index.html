@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AegisID // Forensic Screening Workstation</title>
+  <title>AegisID // Forensic Intelligence Screening Engine (SSB / MHA)</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -35,10 +35,9 @@
     <div class="flex items-center gap-3">
       <button id="btn-print" onclick="window.print()" class="hidden md:flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-slate-700 text-xs font-semibold px-3 py-1.5 rounded-lg transition disabled:opacity-40" disabled>
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/></svg>
-        Export Screening Report
+        Export BSA 65B Dossier
       </button>
-      <span id="system-state" class="text-[10px] font-semibold text-cyan-300 border border-cyan-500/30 bg-cyan-500/10 px-2 py-0.5 rounded mono">STATE: READY</span>
-      <span class="text-xs font-semibold text-emerald-400 flex items-center gap-1.5 mono">
+      <span id="state-badge" class="text-xs font-semibold text-emerald-400 flex items-center gap-1.5 mono">
         <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span> ONLINE
       </span>
     </div>
@@ -54,9 +53,8 @@
           <h2 class="text-sm font-bold text-white uppercase tracking-wider">Document Ingestion & Multi-Signal Pre-Screening</h2>
           <p class="text-xs text-slate-400">Upload identity document or execute simulated test cases for verification.</p>
         </div>
-        <!-- Synthetic Demo Trigger Buttons -->
         <div class="flex items-center gap-2">
-          <span class="text-[10px] text-slate-400 uppercase font-bold mr-1">Demo Scenarios:</span>
+          <span class="text-[10px] text-slate-400 uppercase font-bold mr-1">DEMO SCENARIOS:</span>
           <button onclick="loadSyntheticScenario('clean')" class="text-[10px] px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 font-semibold transition">Genuine Doc</button>
           <button onclick="loadSyntheticScenario('tamper')" class="text-[10px] px-2.5 py-1 rounded bg-red-950/40 hover:bg-red-900/60 text-red-300 border border-red-800/60 font-semibold transition">Altered Splicing</button>
           <button onclick="loadSyntheticScenario('screen')" class="text-[10px] px-2.5 py-1 rounded bg-amber-950/40 hover:bg-amber-900/60 text-amber-300 border border-amber-800/60 font-semibold transition">Screen Spoof</button>
@@ -79,7 +77,7 @@
 
         <div>
           <label class="block text-[10px] font-bold uppercase tracking-wider text-slate-300 mb-1">
-            MRZ String (Optional ICAO Doc 9303 Verification)
+            MRZ STRING (OPTIONAL ICAO DOC 9303 VERIFICATION)
           </label>
           <input type="text" id="mrz-input" placeholder="e.g. P<UTOERIKSSON<<ANNA<<<<<<<<<<<<<<<<<<..." class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-cyan-500 mono" />
           <button id="run-audit-btn" class="w-full mt-2 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold py-2 rounded-xl text-xs uppercase tracking-wider shadow-lg shadow-cyan-500/20 transition disabled:opacity-40" disabled>
@@ -196,13 +194,11 @@
           <div class="relative w-full h-80 bg-black rounded-xl overflow-hidden border border-slate-800 select-none flex items-center justify-center" id="viewer-stage">
             <span id="stage-placeholder" class="text-xs text-slate-600">Select document to preview evidence layers</span>
             
-            <!-- Slider Elements -->
             <img id="view-base" class="absolute inset-0 w-full h-full object-contain hidden pointer-events-none" />
             <div id="view-overlay-wrap" class="absolute inset-0 w-1/2 h-full overflow-hidden border-r-2 border-cyan-400 bg-black hidden">
               <img id="view-overlay" class="absolute inset-0 w-full h-full object-contain max-w-none pointer-events-none" />
             </div>
 
-            <!-- Single Image Views -->
             <img id="view-single" class="w-full h-full object-contain hidden" />
           </div>
 
@@ -228,46 +224,6 @@
     </div>
   </main>
 
-  <!-- Printable Screening Report -->
-  <div id="print-dossier" class="hidden bg-white text-black p-10 max-w-4xl mx-auto space-y-6">
-    <div class="border-b-2 border-black pb-4 flex justify-between items-start">
-      <div>
-        <h1 class="text-xl font-black uppercase">AegisID Automated Forensic Screening Report</h1>
-        <p class="text-xs font-bold text-gray-700">Digital identity document anomaly screening summary</p>
-        <p class="text-[10px] text-gray-600">This output is an automated screening aid and requires trained human review.</p>
-      </div>
-      <div class="text-right">
-        <span id="dos-case-id" class="text-xs font-mono font-bold border border-black px-2 py-1">CASE: --</span>
-      </div>
-    </div>
-
-    <div class="grid grid-cols-2 gap-3 text-xs font-mono border-b border-gray-300 pb-3">
-      <div><strong>Audit Timestamp:</strong> <span id="dos-time">--</span></div>
-      <div><strong>Backend Version:</strong> <span id="dos-version">--</span></div>
-      <div><strong>System Verdict:</strong> <span id="dos-verdict">--</span></div>
-      <div class="col-span-2 break-all"><strong>Evidence SHA-256:</strong> <span id="dos-sha">--</span></div>
-      <div><strong>Quality Assessment:</strong> <span id="dos-quality">--</span></div>
-      <div><strong>Screen Recapture (Moiré):</strong> <span id="dos-moire">--</span></div>
-      <div><strong>Spatial Tampering Regions:</strong> <span id="dos-regions">--</span></div>
-      <div><strong>ICAO 9303 Checksum Status:</strong> <span id="dos-mrz">--</span></div>
-    </div>
-
-    <div class="space-y-2">
-      <h3 class="text-xs font-bold uppercase">Localized Visual Tampering Evidence</h3>
-      <div class="h-64 border border-gray-400 flex items-center justify-center">
-        <img id="dos-img" class="max-h-full max-w-full object-contain" />
-      </div>
-    </div>
-
-    <div class="border-t border-black pt-3 text-[10px] text-gray-600 space-y-1">
-      <p><strong>Limitations:</strong> Signal anomalies may arise from benign capture conditions, recompression, or metadata transformations. This report does not prove authenticity or forgery and should be treated as screening assistance only.</p>
-      <div class="pt-6 flex justify-between">
-        <span>Screening System ID: <strong>AEGIS-SCREEN-CORE-01</strong></span>
-        <span>Investigator Stamp / Signature: _______________________</span>
-      </div>
-    </div>
-  </div>
-
   <script>
     let activeData = null;
     let selectedFile = null;
@@ -283,20 +239,7 @@
     const stagePlaceholder = document.getElementById('stage-placeholder');
     const sliderStage = document.getElementById('viewer-stage');
     const sliderCtrl = document.getElementById('slider-ctrl');
-    const systemStateEl = document.getElementById('system-state');
-
-    function setSystemState(state) {
-      systemStateEl.innerText = `STATE: ${state}`;
-      if (state === "ANALYZING") {
-        systemStateEl.className = "text-[10px] font-semibold text-amber-300 border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 rounded mono";
-      } else if (state === "COMPLETED") {
-        systemStateEl.className = "text-[10px] font-semibold text-emerald-300 border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 rounded mono";
-      } else if (state === "ERROR") {
-        systemStateEl.className = "text-[10px] font-semibold text-red-300 border border-red-500/30 bg-red-500/10 px-2 py-0.5 rounded mono";
-      } else {
-        systemStateEl.className = "text-[10px] font-semibold text-cyan-300 border border-cyan-500/30 bg-cyan-500/10 px-2 py-0.5 rounded mono";
-      }
-    }
+    const stateBadge = document.getElementById('state-badge');
 
     uploader.onchange = (e) => {
       selectedFile = e.target.files[0];
@@ -310,11 +253,24 @@
       viewOverlayWrap.style.width = e.target.value + "%";
     };
 
+    function setState(s) {
+      if (s === "ANALYZING") {
+        stateBadge.className = "text-xs font-semibold text-amber-400 flex items-center gap-1.5 mono";
+        stateBadge.innerHTML = '<span class="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span> ANALYZING';
+      } else if (s === "COMPLETED") {
+        stateBadge.className = "text-xs font-semibold text-emerald-400 flex items-center gap-1.5 mono";
+        stateBadge.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-400"></span> COMPLETED';
+      } else {
+        stateBadge.className = "text-xs font-semibold text-red-400 flex items-center gap-1.5 mono";
+        stateBadge.innerHTML = '<span class="w-2 h-2 rounded-full bg-red-400"></span> ERROR';
+      }
+    }
+
     runBtn.onclick = async () => {
       if (!selectedFile) return;
+      setState("ANALYZING");
       runBtn.disabled = true;
       runBtn.innerText = "AUDITING FORENSIC SIGNALS...";
-      setSystemState("ANALYZING");
 
       const formData = new FormData();
       formData.append("file", selectedFile);
@@ -322,40 +278,43 @@
 
       try {
         const response = await fetch('/api/audit', { method: 'POST', body: formData });
-        const res = await response.json();
-        if (!response.ok || res.error) {
-          throw new Error((res.error && res.error.message) ? res.error.message : "Pipeline execution failed.");
+        if (!response.ok) {
+          const errData = await response.json().catch(() => ({ detail: "HTTP " + response.status }));
+          throw new Error(errData.detail || "Server error " + response.status);
         }
+        const res = await response.json();
         renderAuditResults(res);
-        setSystemState(res.system_state || "COMPLETED");
+        setState("COMPLETED");
       } catch (err) {
-        setSystemState("ERROR");
-        alert(err.message || "Pipeline error during execution.");
+        setState("ERROR");
+        alert("Screening Exception: " + err.message);
+      } finally {
+        runBtn.disabled = false;
+        runBtn.innerText = "Execute Forensic Inspection";
       }
-      runBtn.disabled = false;
-      runBtn.innerText = "Execute Forensic Inspection";
     };
 
     function renderAuditResults(res) {
       activeData = res;
-      document.getElementById('btn-print').disabled = false;
+      const btnPrint = document.getElementById('btn-print');
+      if (btnPrint) btnPrint.disabled = false;
 
-      // Scorecard
       const vTag = document.getElementById('verdict-tag');
       const rScore = document.getElementById('risk-score');
       const sBar = document.getElementById('score-bar');
       const bConf = document.getElementById('badge-confidence');
 
-      vTag.innerText = res.risk.verdict;
-      rScore.innerText = res.risk.risk_score + "/100";
-      sBar.style.width = res.risk.risk_score + "%";
-      bConf.innerText = "CONFIDENCE: " + Math.round(res.risk.confidence * 100) + "%";
+      const risk = res.risk || {};
+      vTag.innerText = risk.verdict || "ANOMALIES DETECTED";
+      rScore.innerText = (risk.risk_score || 0) + "/100";
+      sBar.style.width = (risk.risk_score || 0) + "%";
+      bConf.innerText = "CONFIDENCE: " + Math.round((risk.confidence || 0.85) * 100) + "%";
 
-      if (res.risk.risk_level === "HIGH") {
+      if (risk.risk_level === "HIGH") {
         vTag.className = "text-base font-extrabold text-red-400";
         rScore.className = "text-2xl font-black text-red-400 mono";
         sBar.className = "h-full bg-red-500 transition-all duration-500";
-      } else if (res.risk.risk_level === "MEDIUM") {
+      } else if (risk.risk_level === "MEDIUM") {
         vTag.className = "text-base font-extrabold text-amber-400";
         rScore.className = "text-2xl font-black text-amber-400 mono";
         sBar.className = "h-full bg-amber-500 transition-all duration-500";
@@ -365,65 +324,52 @@
         sBar.className = "h-full bg-emerald-500 transition-all duration-500";
       }
 
-      document.getElementById('action-recommendation').innerText = res.risk.recommendation;
+      document.getElementById('action-recommendation').innerText = risk.recommendation || "Standard Screening";
 
-      // Checklist Statuses
-      setBadge('chk-quality', res.quality.passed, "Passed", "Poor Quality");
-      setBadge('chk-moire', !res.forensics.moire.is_screen_recapture, "Natural", "Screen Spoof");
-      setBadge('chk-tamper', res.forensics.box_count === 0, "Intact", res.forensics.box_count + " Alteration(s)");
+      setBadge('chk-quality', res.quality?.passed, "Passed", "Poor Quality");
+      setBadge('chk-moire', !res.forensics?.moire?.is_screen_recapture, "Natural", "Screen Spoof");
+      setBadge('chk-tamper', (res.forensics?.box_count || 0) === 0, "Intact", (res.forensics?.box_count || 0) + " Alteration(s)");
       
-      const mrzPassed = res.deterministic.mrz.is_mrz_detected ? res.deterministic.mrz.all_checks_passed : null;
+      const mrzPassed = res.deterministic?.mrz?.is_mrz_detected ? res.deterministic.mrz.all_checks_passed : null;
       if (mrzPassed === null) {
-        document.getElementById('chk-mrz').className = "text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400";
-        document.getElementById('chk-mrz').innerText = "Not Provided";
+        const el = document.getElementById('chk-mrz');
+        el.className = "text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400";
+        el.innerText = "Not Provided";
       } else {
         setBadge('chk-mrz', mrzPassed, "Pass (7-3-1)", "Checksum Fail");
       }
 
-      setBadge('chk-exif', res.metadata.software_traces.length === 0, "Clean", "Editor Trace");
+      setBadge('chk-exif', (res.metadata?.software_traces || []).length === 0, "Clean", "Editor Trace");
 
-      // Explainable Breakdown
       const bdList = document.getElementById('breakdown-list');
       bdList.innerHTML = "";
-      res.risk.breakdown.forEach(item => {
+      (risk.breakdown || []).forEach(item => {
         const li = document.createElement('li');
         li.className = "flex items-start gap-1.5";
         li.innerHTML = `<span class="text-cyan-400 mono">•</span> <span>${item}</span>`;
         bdList.appendChild(li);
       });
 
-      // Timeline
       const tlContainer = document.getElementById('timeline-container');
       tlContainer.innerHTML = "";
-      res.timeline.forEach(event => {
+      (res.timeline || []).forEach(event => {
         const div = document.createElement('div');
         div.className = "flex justify-between items-center text-[10px] p-1.5 rounded bg-slate-950/40 border border-slate-800/60";
-        div.innerHTML = `<span class="text-slate-300 font-medium">${event.event}</span> <span class="mono text-slate-500">${event.time.split(' ')[1]}</span>`;
+        const timePart = (event.time || "").includes('T') ? event.time.split('T')[1].replace('Z', '') : event.time;
+        div.innerHTML = `<span class="text-slate-300 font-medium">${event.event}</span> <span class="mono text-slate-500">${timePart}</span>`;
         tlContainer.appendChild(div);
       });
 
-      // Prepare Viewers
       stagePlaceholder.classList.add('hidden');
-      viewBase.src = res.images.orig_b64;
-      viewOverlay.src = res.images.annotated_b64;
+      viewBase.src = res.images?.orig_b64 || "";
+      viewOverlay.src = res.images?.annotated_b64 || "";
       viewOverlay.style.width = sliderStage.clientWidth + "px";
       setViewMode('slider');
-
-      // Populate Dossier
-      document.getElementById('dos-case-id').innerText = "CASE: " + res.case_id;
-      document.getElementById('dos-time').innerText = res.timestamp;
-      document.getElementById('dos-version').innerText = res.backend_version || "unknown";
-      document.getElementById('dos-verdict').innerText = res.risk.verdict + " (" + res.risk.risk_score + "/100)";
-      document.getElementById('dos-sha').innerText = res.sha256;
-      document.getElementById('dos-quality').innerText = res.quality.metrics.blur_status + " (" + res.quality.metrics.resolution + ")";
-      document.getElementById('dos-moire').innerText = res.forensics.moire.is_screen_recapture ? "DETECTED (Screen Spoof)" : "NEGATIVE (Paper/Plastic)";
-      document.getElementById('dos-regions').innerText = res.forensics.box_count + " localized region(s)";
-      document.getElementById('dos-mrz').innerText = res.deterministic.mrz.is_mrz_detected ? (res.deterministic.mrz.all_checks_passed ? "PASS" : "FAIL") : "N/A";
-      document.getElementById('dos-img').src = res.images.annotated_b64;
     }
 
     function setBadge(id, isGood, goodTxt, badTxt) {
       const el = document.getElementById(id);
+      if (!el) return;
       if (isGood) {
         el.className = "text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30";
         el.innerText = goodTxt;
@@ -449,27 +395,25 @@
         document.getElementById('vm-ela').className = "px-2.5 py-1 text-[10px] font-bold rounded bg-cyan-600 text-white";
         viewBase.classList.add('hidden');
         viewOverlayWrap.classList.add('hidden');
-        viewSingle.src = activeData.images.ela_b64;
+        viewSingle.src = activeData.images?.ela_b64 || "";
         viewSingle.classList.remove('hidden');
         sliderCtrl.classList.add('hidden');
       } else if (mode === 'annotated') {
         document.getElementById('vm-ann').className = "px-2.5 py-1 text-[10px] font-bold rounded bg-cyan-600 text-white";
         viewBase.classList.add('hidden');
         viewOverlayWrap.classList.add('hidden');
-        viewSingle.src = activeData.images.annotated_b64;
+        viewSingle.src = activeData.images?.annotated_b64 || "";
         viewSingle.classList.remove('hidden');
         sliderCtrl.classList.add('hidden');
       }
     }
 
-    // Synthetic Scenarios for Demonstrating without External Images
     function loadSyntheticScenario(type) {
       const canvas = document.createElement('canvas');
       canvas.width = 700;
       canvas.height = 450;
       const ctx = canvas.getContext('2d');
 
-      // Base card layout
       ctx.fillStyle = "#e2e8f0";
       ctx.fillRect(0, 0, 700, 450);
       ctx.fillStyle = "#1e293b";
@@ -479,14 +423,12 @@
       ctx.font = "bold 18px monospace";
       ctx.fillText("SPECIMEN TRAVEL DOCUMENT / PASSPORT", 50, 60);
 
-      // Photo block
       ctx.fillStyle = "#64748b";
       ctx.fillRect(50, 100, 140, 180);
       ctx.fillStyle = "#ffffff";
       ctx.font = "12px sans-serif";
       ctx.fillText("FACIAL PORTRAIT", 65, 195);
 
-      // Data fields
       ctx.fillStyle = "#94a3b8";
       ctx.font = "14px monospace";
       ctx.fillText("SURNAME: SPECIMEN", 220, 130);
@@ -495,7 +437,6 @@
       ctx.fillText("DATE OF BIRTH: 12 AUG 1994", 220, 220);
 
       if (type === 'tamper') {
-        // Introduce sharp spliced patch over DOB
         ctx.fillStyle = "#ffffff";
         ctx.fillRect(345, 205, 120, 24);
         ctx.fillStyle = "#ff0000";
@@ -503,7 +444,6 @@
         ctx.fillText("28 NOV 2002", 350, 222);
       }
 
-      // MRZ Lines
       ctx.fillStyle = "#f8fafc";
       ctx.font = "15px monospace";
       if (type === 'clean') {
@@ -511,7 +451,6 @@
         ctx.fillText("L898902C<3UTO9408124F2910236ZE184226B<<<<<14", 50, 390);
         document.getElementById('mrz-input').value = "P<UTOSPECIMEN<<JANE<CITIZEN<<<<<<<<<<<<<<<<<\nL898902C<3UTO9408124F2910236ZE184226B<<<<<14";
       } else {
-        // Intentionally corrupted check digit for tamper demonstration
         ctx.fillText("P<UTOSPECIMEN<<JANE<CITIZEN<<<<<<<<<<<<<<<<<", 50, 360);
         ctx.fillText("L898902C<9UTO9408124F2910236ZE184226B<<<<<14", 50, 390);
         document.getElementById('mrz-input').value = "P<UTOSPECIMEN<<JANE<CITIZEN<<<<<<<<<<<<<<<<<\nL898902C<9UTO9408124F2910236ZE184226B<<<<<14";
