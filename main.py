@@ -22,6 +22,7 @@ from aegis_core.forensics.ela import DifferentialELAAnalyzer
 from aegis_core.forensics.texture import TextureFlatnessAnalyzer
 from aegis_core.forensics.gradient import EdgeDiscontinuityAnalyzer
 from aegis_core.forensics.noise import LocalNoiseAnalyzer
+from aegis_core.forensics.illumination import ChromaticIlluminationAnalyzer
 from aegis_core.forensics.moire import OpticalMoireAnalyzer
 from aegis_core.forensics.metadata import MetadataFootprintAnalyzer
 from aegis_core.fusion.cross_field import CrossFieldConsistencyEngine
@@ -55,7 +56,7 @@ async def execute_audit(
     id_number: str = Form(""),
     mrz_raw_input: str = Form("")
 ):
-    # Phase 11: Memory-Safe Stream Ingestion & Magic Byte Quarantine
+    # Phase 11: Secure Stream Ingestion & Magic Byte Quarantine
     try:
         raw_bytes, orig_pil, img_cv, verified_mime = await StreamIngestionHandler.ingest_and_sanitize(file)
     except IngestionSecurityError as sec_err:
@@ -98,7 +99,7 @@ async def execute_audit(
     trail.log(f"Biometric Portrait: {'Extracted' if face_res['face_detected'] else 'No Face Detected'} (Swap Gradient: {face_res['swap_score']})",
               "FLAGGED" if face_res["anomaly_detected"] else "PASS")
 
-    # Phase 12 (NEW): Typographic Font Disparity & Baseline Audit
+    # Phase 12: Typographic Font Disparity & Baseline Audit
     font_res = FontDisparityAnalyzer.audit(warped_cv, qr_bbox=qr_res.get("bbox"), face_bbox=face_res.get("bbox"))
     if font_res["count"] > 0:
         trail.log(f"Typographic Audit: {font_res['count']} Glyph Anomalies in {font_res['anomalous_rows']} Row(s)", "FLAGGED")
@@ -108,16 +109,21 @@ async def execute_audit(
     texture_res = TextureFlatnessAnalyzer.detect_digital_strokes(warped_cv, qr_bbox=qr_res.get("bbox"))
     gradient_res = EdgeDiscontinuityAnalyzer.audit(warped_cv, qr_bbox=qr_res.get("bbox"))
     noise_res = LocalNoiseAnalyzer.audit(warped_cv, qr_bbox=qr_res.get("bbox"))
+    illum_res = ChromaticIlluminationAnalyzer.audit(warped_cv, qr_bbox=qr_res.get("bbox"))
     moire_res = OpticalMoireAnalyzer.inspect(warped_cv)
     meta_res = MetadataFootprintAnalyzer.inspect(orig_pil)
 
-    # Phase 6: Spatial NMS Clustering (Aggregates ELA, Texture, Gradient, Noise, Font, and Photo-Swap candidates)
+    if illum_res["count"] > 0:
+        trail.log(f"Illumination Surface Audit: {illum_res['count']} Chromatic Gradient Anomaly Zone(s)", "FLAGGED")
+
+    # Phase 6: Spatial NMS Clustering (ELA + Texture + Gradient + Noise + Font + Illumination + Photo-Swap)
     raw_candidates = (
         ela_res.get("suspicious_zones", []) +
         texture_res.get("tamper_zones", []) +
         gradient_res.get("tamper_zones", []) +
         noise_res.get("tamper_zones", []) +
-        font_res.get("tamper_zones", [])
+        font_res.get("tamper_zones", []) +
+        illum_res.get("tamper_zones", [])
     )
     if face_res.get("tamper_zone"):
         raw_candidates.append(face_res["tamper_zone"])
@@ -150,7 +156,7 @@ async def execute_audit(
     final_verdict = ConfidenceAbstentionGate.evaluate(quality, merged_regions, risk_data)
     trail.log(f"Risk Fusion Synthesis: Score {final_verdict['risk_score']}/100 ({final_verdict['risk_level']})", "COMPLETED")
 
-    # Draw Annotations on Warped Canvas
+    # Annotate Warped Canvas
     annotated = warped_cv.copy()
     for reg in merged_regions:
         x, y, w, h = reg["bbox"]
@@ -191,6 +197,10 @@ async def execute_audit(
             "font_audit": {
                 "anomalies_detected": font_res["count"],
                 "anomalous_rows": font_res["anomalous_rows"]
+            },
+            "illumination": {
+                "anomalies_detected": illum_res["count"],
+                "mean_divergence": illum_res["mean_divergence"]
             },
             "ela_variance": ela_res.get("ela_variance", 0.0),
             "texture_variance": texture_res.get("mean_variance", 0.0),
