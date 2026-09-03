@@ -154,32 +154,44 @@ class MultiSignalForensics:
         buffered.seek(0)
         resaved = Image.open(buffered)
 
+        # 1. Multi-Band RGB Difference
         ela_im = ImageChops.difference(rgb_pil, resaved)
         extrema = ela_im.getextrema()
         max_diff = max([ex[1] for ex in extrema])
         scale = 255.0 / max_diff if max_diff != 0 else 1.0
         ela_enhanced = ImageEnhance.Brightness(ela_im).enhance(scale)
         ela_cv = cv2.cvtColor(np.array(ela_enhanced), cv2.COLOR_RGB2BGR)
-        gray_ela = cv2.cvtColor(ela_cv, cv2.COLOR_BGR2GRAY)
 
+        # 2. Channel Max Delta (Catches dark-on-dark hair strokes & color edits)
+        diff_np = np.array(ela_im).astype(np.float32)
+        channel_max = np.max(diff_np, axis=2).astype(np.uint8)
+
+        # 3. Dynamic Thresholding on Card Canvas
         orig_gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY) if len(img_cv.shape) == 3 else img_cv
-        doc_mask = orig_gray > 40
-        valid_ela = gray_ela[doc_mask] if np.sum(doc_mask) > 500 else gray_ela
-        mean_val = float(np.mean(valid_ela))
-        std_val = float(np.std(valid_ela))
+        doc_mask = orig_gray > 35
+        valid_pixels = channel_max[doc_mask] if np.sum(doc_mask) > 500 else channel_max
+        mean_val = float(np.mean(valid_pixels))
+        std_val = float(np.std(valid_pixels))
 
-        # Precision threshold clamped to catch subtle marks without firing on clean cards
-        dynamic_thresh = max(48, min(int(mean_val + (1.8 * std_val)), 66))
+        # Sensitive stroke floor: 32 catches faint pen ink and overlays
+        dynamic_thresh = max(32, min(int(mean_val + (1.45 * std_val)), 58))
+        _, thresh = cv2.threshold(channel_max, dynamic_thresh, 255, cv2.THRESH_BINARY)
 
-        blur_ela = cv2.GaussianBlur(gray_ela, (3, 3), 0)
-        _, thresh = cv2.threshold(blur_ela, dynamic_thresh, 255, cv2.THRESH_BINARY)
+        # 4. Adaptive Stroke Fusion (Local gradient discontinuity)
+        sobel_x = cv2.Sobel(orig_gray, cv2.CV_64F, 1, 0, ksize=3)
+        sobel_y = cv2.Sobel(orig_gray, cv2.CV_64F, 0, 1, ksize=3)
+        grad_mag = np.sqrt(sobel_x**2 + sobel_y**2).astype(np.uint8)
+        _, grad_thresh = cv2.threshold(grad_mag, 110, 255, cv2.THRESH_BINARY)
+        
+        # Combine compression residual + abrupt hand-drawn edge jumps
+        combined_tamper = cv2.bitwise_or(thresh, cv2.bitwise_and(thresh, grad_thresh))
 
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-        closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (4, 4))
+        closed = cv2.morphologyEx(combined_tamper, cv2.MORPH_CLOSE, kernel)
 
         contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         annotated_cv = img_cv.copy() if len(img_cv.shape) == 3 else cv2.cvtColor(img_cv, cv2.COLOR_GRAY2BGR)
-        h_img, w_img = gray_ela.shape
+        h_img, w_img = orig_gray.shape
         total_area = h_img * w_img
 
         suspicious_regions = []
@@ -187,12 +199,14 @@ class MultiSignalForensics:
 
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            # Area floor 40px catches small scribbles, ink marks, and edited numbers
-            if 40 < area < (total_area * 0.12):
+            # Area floor lowered to 15 to capture small slashes, dots, and stroke segments
+            if 15 < area < (total_area * 0.18):
                 x, y, w, h = cv2.boundingRect(cnt)
                 aspect = float(w) / max(h, 1)
 
-                if aspect > 5.5 and h < 12:
+                # Differentiate clean printed divider rules from hand-drawn strike-throughs:
+                # Real divider rules span > 70% width and have < 4px height
+                if w > (w_img * 0.70) and h < 5:
                     continue
 
                 cv2.rectangle(annotated_cv, (x, y), (x + w, y + h), (0, 0, 255), 2)
@@ -202,7 +216,7 @@ class MultiSignalForensics:
                 suspicious_regions.append({
                     "region_id": f"REG_{box_count + 1}",
                     "bbox": [int(x), int(y), int(w), int(h)],
-                    "anomaly_score": 0.85
+                    "anomaly_score": 0.88
                 })
                 box_count += 1
 
@@ -222,7 +236,6 @@ class RiskFusionEngine:
         explanations = []
         boxes = forensics.get("box_count", 0)
 
-        # Smart Gating
         if not quality.get("passed", False) and boxes == 0:
             return {
                 "verdict": "ABSTAIN: INSUFFICIENT EVIDENCE",
@@ -233,9 +246,8 @@ class RiskFusionEngine:
                 "recommendation": "RE-ACQUIRE DOCUMENT UNDER PROPER ILLUMINATION WITHOUT MOTION BLUR"
             }
 
-        # Tampering signals
         if boxes > 0:
-            assigned = min(45 + (boxes * 15), 85)
+            assigned = min(50 + (boxes * 12), 92)
             risk_accum += assigned
             explanations.append(f"+{assigned} Spatial pixel tampering localized in {boxes} distinct region(s).")
         elif forensics.get("ela_variance", 0) > 30.0:
