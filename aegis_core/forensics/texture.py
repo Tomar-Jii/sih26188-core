@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 
 class TextureFlatnessAnalyzer:
-    """Isolates mobile markup brush strokes and digital paint scribbles from genuine paper print."""
+    """Isolates hand-drawn digital brush strokes, scribbles, and blackouts using Euclidean Distance Transform."""
 
     @classmethod
     def detect_digital_strokes(cls, img_cv: np.ndarray, qr_bbox: list = None) -> dict:
@@ -13,49 +13,62 @@ class TextureFlatnessAnalyzer:
         h_img, w_img = gray.shape[:2]
         total_area = h_img * w_img
 
-        gray_f = gray.astype(np.float32)
-        local_mean = cv2.blur(gray_f, (5, 5))
-        local_sq = cv2.blur(gray_f ** 2, (5, 5))
-        local_std = np.sqrt(np.maximum(local_sq - (local_mean ** 2), 0.0))
+        # 1. Isolate all dark marks (printed text + digital markup)
+        # Using Otsu thresholding bounded to dark ink
+        _, raw_dark = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        dark_mask = np.logical_and(raw_dark > 0, gray < 95).astype(np.uint8) * 255
 
-        # Digital brush markups: dark stroke (gray < 50) with synthetic flatness (local_std < 2.8)
-        is_dark = gray < 50
-        is_flat_brush = local_std < 2.8
-        raw_stroke_mask = np.logical_and(is_dark, is_flat_brush).astype(np.uint8) * 255
-
+        # Mask out QR Code if present
         if qr_bbox:
             qx, qy, qw, qh = qr_bbox
             pad = 8
-            cv2.rectangle(raw_stroke_mask, (max(0, qx - pad), max(0, qy - pad)),
+            cv2.rectangle(dark_mask, (max(0, qx - pad), max(0, qy - pad)),
                           (min(w_img, qx + qw + pad), min(h_img, qy + qh + pad)), 0, -1)
 
-        # Ignore tiny normal character dots (< 40px)
-        kernel_clean = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        cleaned = cv2.morphologyEx(raw_stroke_mask, cv2.MORPH_OPEN, kernel_clean)
-        kernel_connect = cv2.getStructuringElement(cv2.MORPH_RECT, (4, 4))
-        connected = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, kernel_connect)
+        # 2. Euclidean Distance Transform: Measures radius/thickness from edge to stroke core
+        dist = cv2.distanceTransform(dark_mask, cv2.DIST_L2, 5)
 
-        contours, _ = cv2.findContours(connected, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # Normal printed font stroke thickness is 1.5 - 2.2px (dist peak < 2.0).
+        # Mobile gallery markup / digital brush thickness is >= 6px (dist peak >= 2.7).
+        thick_stroke_seeds = (dist >= 2.7).astype(np.uint8) * 255
+
+        # 3. Suppress Standard Government Logos (Ashoka emblem & UIDAI fingerprint)
+        # Ashoka Pillar: top-left corner (x < 18%, y < 25%)
+        cv2.rectangle(thick_stroke_seeds, (0, 0), (int(w_img * 0.18), int(h_img * 0.25)), 0, -1)
+        # Aadhaar Fingerprint Logo: top-right corner (x > 78%, y < 25%)
+        cv2.rectangle(thick_stroke_seeds, (int(w_img * 0.78), 0), (w_img, int(h_img * 0.25)), 0, -1)
+
+        # 4. Reconstruct full stroke geometry from thick seeds
+        kernel_grow = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        reconstructed = cv2.dilate(thick_stroke_seeds, kernel_grow, iterations=2)
+        reconstructed = cv2.bitwise_and(reconstructed, dark_mask)
+
+        # Bridge broken scribble segments
+        kernel_bridge = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+        closed_strokes = cv2.morphologyEx(reconstructed, cv2.MORPH_CLOSE, kernel_bridge)
+
+        contours, _ = cv2.findContours(closed_strokes, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         tamper_zones = []
 
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            # Focus on drawn markup lines and patches (area > 45px)
-            if 45 < area < (total_area * 0.15):
+            # Area filter: captures real scribbles, strike-through lines, and hair doodles (> 50px)
+            if 50 < area < (total_area * 0.15):
                 x, y, w, h = cv2.boundingRect(cnt)
                 aspect = float(w) / max(h, 1)
 
-                if aspect > 6.0 and h < 7:
+                # Ignore thin dividing lines spanning card width
+                if aspect > 7.0 and h < 7:
                     continue
 
                 tamper_zones.append({
                     "bbox": [int(x), int(y), int(w), int(h)],
                     "score": 0.94,
-                    "signal": "Digital Ink / Flat Texture Signature"
+                    "signal": "Digital Ink / Markup Stroke Signature"
                 })
 
         return {
             "tamper_zones": tamper_zones,
             "count": len(tamper_zones),
-            "mean_variance": round(float(np.mean(local_std)), 2)
+            "mean_variance": round(float(np.mean(dist)), 2)
         }
