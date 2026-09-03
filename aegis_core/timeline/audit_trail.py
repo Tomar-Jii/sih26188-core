@@ -11,6 +11,7 @@ class ForensicAuditTrail:
     def log(self, event_description: str, status: str = "PASS"):
         timestamp_iso = datetime.now(timezone.utc).strftime("%H:%M:%S.%fZ")[:-4] + "Z"
         self.events.append({
+            "time": timestamp_iso,
             "timestamp": timestamp_iso,
             "event": event_description,
             "status": status

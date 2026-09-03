@@ -13,7 +13,6 @@ from aegis_core.ingestion.handler import StreamIngestionHandler, IngestionSecuri
 from aegis_core.quality.gatekeeper import DocumentQualityGate
 from aegis_core.vision.warp import DocumentPerspectiveWarper
 from aegis_core.vision.face_segment import BiometricPortraitAnalyzer
-from aegis_core.vision.font_audit import FontDisparityAnalyzer
 from aegis_core.classification.doc_classifier import DocumentClassifier
 from aegis_core.validators.dihedral import VerhoeffDihedralValidator
 from aegis_core.validators.mrz_td3 import ICAO9303MRZParser
@@ -22,7 +21,6 @@ from aegis_core.forensics.ela import DifferentialELAAnalyzer
 from aegis_core.forensics.texture import TextureFlatnessAnalyzer
 from aegis_core.forensics.gradient import EdgeDiscontinuityAnalyzer
 from aegis_core.forensics.noise import LocalNoiseAnalyzer
-from aegis_core.forensics.illumination import ChromaticIlluminationAnalyzer
 from aegis_core.forensics.moire import OpticalMoireAnalyzer
 from aegis_core.forensics.metadata import MetadataFootprintAnalyzer
 from aegis_core.fusion.cross_field import CrossFieldConsistencyEngine
@@ -56,7 +54,6 @@ async def execute_audit(
     id_number: str = Form(""),
     mrz_raw_input: str = Form("")
 ):
-    # Phase 11: Secure Stream Ingestion & Magic Byte Quarantine
     try:
         raw_bytes, orig_pil, img_cv, verified_mime = await StreamIngestionHandler.ingest_and_sanitize(file)
     except IngestionSecurityError as sec_err:
@@ -68,15 +65,16 @@ async def execute_audit(
     sha256 = hashlib.sha256(raw_bytes).hexdigest()
     trail.log(f"Stream Ingested & Quarantined (Verified Binary: {verified_mime})", "VERIFIED")
 
-    # Phase 4: Quality Gate
+    # 1. Quality Gate
     quality = DocumentQualityGate.audit(img_cv)
     q_status = quality["metrics"].get("blur_status", "Acceptable")
     trail.log(f"Pre-Screening Quality Gate: {q_status} Sharpness", "PASS" if quality["passed"] else "FLAGGED")
 
-    # Phase 3: Boundary Perspective Normalization
+    # 2. Document Surface Perspective Normalization
     warped_cv = DocumentPerspectiveWarper.extract_and_warp(img_cv)
+    warped_pil = Image.fromarray(cv2.cvtColor(warped_cv, cv2.COLOR_BGR2RGB))
 
-    # Phase 8 & 9: Deterministic Cryptographic Validators
+    # 3. Deterministic Cryptographic Validators
     clean_id = id_number.replace(" ", "").strip()
     dihedral_valid = False
     if clean_id and len(clean_id) == 12 and clean_id.isdigit():
@@ -87,43 +85,32 @@ async def execute_audit(
     if mrz_res["is_mrz_detected"]:
         trail.log(f"ICAO Doc 9303 MRZ Checksum: {'PASS' if mrz_res['all_checks_passed'] else 'FAIL'}", "PASS" if mrz_res['all_checks_passed'] else "FLAGGED")
 
-    # Phase 10: Multi-Pass QR Decoder & Masker
+    # 4. Multi-Pass QR Decoder & Masker
     qr_res = MultiPassQREngine.inspect_and_mask(warped_cv)
 
-    # Phase 8: Multi-Modal Document Classification
+    # 5. Multi-Modal Document Classification
     classification_res = DocumentClassifier.classify(warped_cv, mrz_res=mrz_res, qr_res=qr_res)
     trail.log(f"Document Classification: {classification_res['document_type']} (Confidence: {int(classification_res['confidence']*100)}%)", "PASS")
 
-    # Phase 7: Biometric Face Segmentation & Photo-Swap Audit
+    # 6. Biometric Portrait Segmentation & Photo-Swap Audit
     face_res = BiometricPortraitAnalyzer.extract_and_audit(warped_cv)
-    trail.log(f"Biometric Portrait: {'Extracted' if face_res['face_detected'] else 'No Face Detected'} (Swap Gradient: {face_res['swap_score']})",
+    trail.log(f"Biometric Portrait: {'Extracted' if face_res['face_detected'] else 'No Face'} (Swap Score: {face_res['swap_score']})",
               "FLAGGED" if face_res["anomaly_detected"] else "PASS")
 
-    # Phase 12: Typographic Font Disparity & Baseline Audit
-    font_res = FontDisparityAnalyzer.audit(warped_cv, qr_bbox=qr_res.get("bbox"), face_bbox=face_res.get("bbox"))
-    if font_res["count"] > 0:
-        trail.log(f"Typographic Audit: {font_res['count']} Glyph Anomalies in {font_res['anomalous_rows']} Row(s)", "FLAGGED")
-
-    # Multi-Signal Spatial Scanners
-    ela_res = DifferentialELAAnalyzer.analyze(orig_pil, warped_cv, qr_bbox=qr_res.get("bbox"))
+    # 7. Multi-Signal Spatial Scanners (Executed on pixel-aligned warped canvas)
+    ela_res = DifferentialELAAnalyzer.analyze(warped_pil, warped_cv, qr_bbox=qr_res.get("bbox"))
     texture_res = TextureFlatnessAnalyzer.detect_digital_strokes(warped_cv, qr_bbox=qr_res.get("bbox"))
     gradient_res = EdgeDiscontinuityAnalyzer.audit(warped_cv, qr_bbox=qr_res.get("bbox"))
     noise_res = LocalNoiseAnalyzer.audit(warped_cv, qr_bbox=qr_res.get("bbox"))
-    illum_res = ChromaticIlluminationAnalyzer.audit(warped_cv, qr_bbox=qr_res.get("bbox"))
     moire_res = OpticalMoireAnalyzer.inspect(warped_cv)
     meta_res = MetadataFootprintAnalyzer.inspect(orig_pil)
 
-    if illum_res["count"] > 0:
-        trail.log(f"Illumination Surface Audit: {illum_res['count']} Chromatic Gradient Anomaly Zone(s)", "FLAGGED")
-
-    # Phase 6: Spatial NMS Clustering (ELA + Texture + Gradient + Noise + Font + Illumination + Photo-Swap)
+    # 8. Spatial NMS Clustering
     raw_candidates = (
         ela_res.get("suspicious_zones", []) +
         texture_res.get("tamper_zones", []) +
         gradient_res.get("tamper_zones", []) +
-        noise_res.get("tamper_zones", []) +
-        font_res.get("tamper_zones", []) +
-        illum_res.get("tamper_zones", [])
+        noise_res.get("tamper_zones", [])
     )
     if face_res.get("tamper_zone"):
         raw_candidates.append(face_res["tamper_zone"])
@@ -132,14 +119,14 @@ async def execute_audit(
     box_count = len(merged_regions)
     trail.log(f"Spatial Fusion (NMS): {box_count} Consolidated Tamper Zone(s)", "FLAGGED" if box_count > 0 else "PASS")
 
-    # Phase 19: Cross-Field Coherence Matrix
+    # 9. Cross-Field Coherence Matrix
     cross_field_res = CrossFieldConsistencyEngine.audit_consistency(
         ocr_fields={"doc_number": clean_id},
         mrz_data=mrz_res,
         qr_data=qr_res
     )
 
-    # Phase 21: Weighted Risk Engine
+    # 10. Weighted Risk Fusion Engine
     risk_data = MultiSignalRiskEngine.compute_risk(
         quality_result=quality,
         mrz_result=mrz_res,
@@ -152,11 +139,11 @@ async def execute_audit(
         cross_field_result=cross_field_res
     )
 
-    # Phase 22: Confidence & Abstention Gate
+    # 11. Confidence Calibration & Abstention Gate
     final_verdict = ConfidenceAbstentionGate.evaluate(quality, merged_regions, risk_data)
     trail.log(f"Risk Fusion Synthesis: Score {final_verdict['risk_score']}/100 ({final_verdict['risk_level']})", "COMPLETED")
 
-    # Annotate Warped Canvas
+    # 12. Draw Annotations (Directly on warped canvas for 1:1 slider alignment)
     annotated = warped_cv.copy()
     for reg in merged_regions:
         x, y, w, h = reg["bbox"]
@@ -164,7 +151,7 @@ async def execute_audit(
         cv2.rectangle(annotated, (x, y), (x + w, y + h), (0, 0, 255), 2)
         cv2.putText(annotated, tag, (x, max(y - 4, 12)), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 0, 255), 1)
 
-    # Phase 25: Court-Admissible BSA 65B Dossier Builder
+    # 13. Section 65B Dossier Builder
     dossier = BSADossierBuilder.build_certificate(
         case_id=trail.case_id,
         sha256_hash=sha256,
@@ -194,14 +181,6 @@ async def execute_audit(
                 "swap_score": face_res["swap_score"],
                 "anomaly_detected": face_res["anomaly_detected"]
             },
-            "font_audit": {
-                "anomalies_detected": font_res["count"],
-                "anomalous_rows": font_res["anomalous_rows"]
-            },
-            "illumination": {
-                "anomalies_detected": illum_res["count"],
-                "mean_divergence": illum_res["mean_divergence"]
-            },
             "ela_variance": ela_res.get("ela_variance", 0.0),
             "texture_variance": texture_res.get("mean_variance", 0.0),
             "gradient_mean": gradient_res.get("mean_gradient", 0.0),
@@ -214,7 +193,7 @@ async def execute_audit(
         "dossier": dossier,
         "timeline": trail.get_timeline(),
         "images": {
-            "orig_b64": f"data:image/png;base64,{pil_to_b64(orig_pil)}",
+            "orig_b64": f"data:image/png;base64,{mat_to_b64(warped_cv)}",
             "annotated_b64": f"data:image/png;base64,{mat_to_b64(annotated)}",
             "ela_b64": f"data:image/png;base64,{pil_to_b64(ela_res.get('ela_enhanced', orig_pil))}",
             "face_b64": f"data:image/png;base64,{mat_to_b64(face_res['face_crop'])}" if face_res["face_detected"] else None
