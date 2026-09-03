@@ -13,6 +13,8 @@ templates = Jinja2Templates(directory="templates")
 forensic_suite = DocumentForensicSuite()
 
 def mat_to_base64(mat: np.ndarray) -> str:
+    if mat is None:
+        return None
     _, buffer = cv2.imencode('.png', mat)
     return base64.b64encode(buffer).decode('utf-8')
 
@@ -42,6 +44,7 @@ async def audit_document(
         moire_results = forensic_suite.analyze_moire_frequency(img_cv)
         ela_img, annotated_cv, ela_variance, tamper_boxes = forensic_suite.localize_tampering(orig_pil)
         qr_results = forensic_suite.audit_qr_code(img_cv)
+        cropped_face = forensic_suite.extract_face_portrait(img_cv)
 
         risk_score = 0
         flags = []
@@ -68,7 +71,6 @@ async def audit_document(
                     risk_score += 15
                     flags.append("Specified ID number format does not match 12-digit standard.")
 
-            # Dynamic Threat Scaling
             if tamper_boxes >= 3:
                 risk_score += min(tamper_boxes * 15, 60)
                 flags.append(f"Pixel Splicing Confirmed: {tamper_boxes} distinct modified patches detected.")
@@ -82,13 +84,15 @@ async def audit_document(
 
             if moire_results["is_screen_recapture"]:
                 risk_score += 35
-                flags.append(f"Screen Optical Moiré detected (Score: {moire_results['papr_score']}) - Recaptured from electronic display.")
+                flags.append(f"Screen Optical Moiré detected (PAPR: {moire_results['papr_score']}) - Recaptured from electronic display.")
 
             if not qr_results["detected"]:
                 flags.append("Document lacks readable QR barcode.")
 
             risk_score = min(max(risk_score, 4), 99)
             verdict = "FORGERY DETECTED" if risk_score >= 50 else ("SUSPICIOUS" if risk_score >= 25 else "GENUINE / AUTHENTIC")
+
+        face_b64 = mat_to_base64(cropped_face)
 
         return {
             "verdict": verdict,
@@ -97,6 +101,7 @@ async def audit_document(
             "flags": flags,
             "is_valid_id": structure_check["is_valid_id"],
             "verhoeff_status": verhoeff_status,
+            "face_avatar": f"data:image/png;base64,{face_b64}" if face_b64 else None,
             "metrics": {
                 "ela_variance": ela_variance,
                 "tamper_regions": tamper_boxes,
