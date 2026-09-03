@@ -7,7 +7,6 @@ from PIL import Image, ImageChops, ImageEnhance
 from PIL.ExifTags import TAGS
 
 class VerhoeffAlgorithm:
-    # Dihedral Group D5 multiplication table
     d_table = [
         [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
         [1, 2, 3, 4, 0, 6, 7, 8, 9, 5],
@@ -20,7 +19,6 @@ class VerhoeffAlgorithm:
         [8, 7, 6, 5, 9, 3, 2, 1, 0, 4],
         [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]
     ]
-    # Permutation table
     p_table = [
         [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
         [1, 5, 7, 6, 2, 8, 3, 0, 9, 4],
@@ -48,6 +46,43 @@ class DocumentForensicSuite:
     @staticmethod
     def compute_sha256(file_bytes: bytes) -> str:
         return hashlib.sha256(file_bytes).hexdigest()
+
+    @staticmethod
+    def validate_id_document_structure(img_cv: np.ndarray) -> dict:
+        """
+        Gatekeeper: Verifies if the image is actually an ID card or just a random screenshot.
+        """
+        h, w = img_cv.shape[:2]
+        aspect_ratio = max(w, h) / min(w, h)
+        
+        # 1. Aspect Ratio Test (Mobile screenshots are usually > 2.0 or < 0.5)
+        is_screenshot_ratio = aspect_ratio > 2.05
+
+        # 2. Cardholder Face Detection using OpenCV's built-in Haar Cascade
+        gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(30, 30))
+        
+        has_face = len(faces) > 0
+
+        # An ID card MUST have a portrait photo and sensible dimensions
+        is_valid_id = has_face and not is_screenshot_ratio
+
+        reason = "Valid ID Card Profile"
+        if not has_face and is_screenshot_ratio:
+            reason = "Device Screenshot Detected: Aspect ratio exceeds ID standard and no cardholder portrait found."
+        elif not has_face:
+            reason = "No cardholder portrait face detected in document."
+        elif is_screenshot_ratio:
+            reason = "Invalid aspect ratio for government card standard."
+
+        return {
+            "is_valid_id": is_valid_id,
+            "has_face": has_face,
+            "face_count": len(faces),
+            "aspect_ratio": round(aspect_ratio, 2),
+            "reason": reason
+        }
 
     @staticmethod
     def audit_exif_metadata(image: Image.Image) -> dict:
