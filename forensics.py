@@ -50,37 +50,32 @@ class DocumentForensicSuite:
     @staticmethod
     def validate_id_document_structure(img_cv: np.ndarray) -> dict:
         """
-        Gatekeeper: Verifies if the image is actually an ID card or just a random screenshot.
+        Fail-safe Gatekeeper: Separates mobile UI screenshots from actual card uploads.
         """
         h, w = img_cv.shape[:2]
-        aspect_ratio = max(w, h) / min(w, h)
+        ratio = max(w, h) / min(w, h)
         
-        # 1. Aspect Ratio Test (Mobile screenshots are usually > 2.0 or < 0.5)
-        is_screenshot_ratio = aspect_ratio > 2.05
-
-        # 2. Cardholder Face Detection using OpenCV's built-in Haar Cascade
-        gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
-        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(30, 30))
+        # Phone screenshots are portrait 20:9 or 19:9 (ratio > 2.05)
+        is_mobile_screenshot = (h > w) and (ratio > 1.95)
         
-        has_face = len(faces) > 0
+        # Color distribution check: Aadhaar/PAN have high white/cream card base
+        hsv = cv2.cvtColor(img_cv, cv2.COLOR_BGR2HSV)
+        # check brightness / saturation
+        sat = hsv[:, :, 1]
+        val = hsv[:, :, 2]
+        is_dark_screen = np.mean(val) < 45  # Dark mode phone screenshots
 
-        # An ID card MUST have a portrait photo and sensible dimensions
-        is_valid_id = has_face and not is_screenshot_ratio
-
-        reason = "Valid ID Card Profile"
-        if not has_face and is_screenshot_ratio:
-            reason = "Device Screenshot Detected: Aspect ratio exceeds ID standard and no cardholder portrait found."
-        elif not has_face:
-            reason = "No cardholder portrait face detected in document."
-        elif is_screenshot_ratio:
-            reason = "Invalid aspect ratio for government card standard."
+        is_valid = not is_mobile_screenshot and not is_dark_screen
+        
+        reason = "Valid Card Form Factor"
+        if is_mobile_screenshot:
+            reason = "Detected Mobile Device Screenshot (Aspect ratio matches phone screen, not an ID card)."
+        elif is_dark_screen:
+            reason = "Detected Dark Mode Interface / Non-Document Canvas."
 
         return {
-            "is_valid_id": is_valid_id,
-            "has_face": has_face,
-            "face_count": len(faces),
-            "aspect_ratio": round(aspect_ratio, 2),
+            "is_valid_id": is_valid,
+            "aspect_ratio": round(ratio, 2),
             "reason": reason
         }
 
@@ -108,32 +103,32 @@ class DocumentForensicSuite:
 
     @staticmethod
     def analyze_moire_frequency(img_cv: np.ndarray) -> dict:
-        gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
-        gray = cv2.resize(gray, (512, 512))
-        
-        dft = np.fft.fft2(gray)
-        dft_shift = np.fft.fftshift(dft)
-        magnitude_spectrum = 20 * np.log(np.abs(dft_shift) + 1e-9)
-        
-        rows, cols = gray.shape
-        crow, ccol = rows // 2, cols // 2
-        magnitude_spectrum[crow-30:crow+30, ccol-30:ccol+30] = 0
-        
-        papr = float(np.percentile(magnitude_spectrum, 99.8) / (np.mean(magnitude_spectrum) + 1e-5))
-        is_screen = papr > 3.65
-        
-        return {
-            "papr_score": round(papr, 3),
-            "is_screen_recapture": is_screen
-        }
+        try:
+            gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+            gray = cv2.resize(gray, (512, 512))
+            
+            dft = np.fft.fft2(gray)
+            dft_shift = np.fft.fftshift(dft)
+            magnitude_spectrum = 20 * np.log(np.abs(dft_shift) + 1e-9)
+            
+            rows, cols = gray.shape
+            crow, ccol = rows // 2, cols // 2
+            magnitude_spectrum[crow-30:crow+30, ccol-30:ccol+30] = 0
+            
+            papr = float(np.percentile(magnitude_spectrum, 99.8) / (np.mean(magnitude_spectrum) + 1e-5))
+            is_screen = papr > 3.65
+            return {"papr_score": round(papr, 3), "is_screen_recapture": is_screen}
+        except Exception:
+            return {"papr_score": 1.0, "is_screen_recapture": False}
 
     @staticmethod
-    def localize_tampering(orig_img: Image.Image, quality: int = 90) -> tuple:
+    def localize_tampering(orig_img: Image.Image, quality: int = 88) -> tuple:
         buffered = io.BytesIO()
         orig_img.save(buffered, format="JPEG", quality=quality)
         buffered.seek(0)
         resaved = Image.open(buffered)
         
+        # High-precision Error Level difference
         ela_im = ImageChops.difference(orig_img.convert("RGB"), resaved.convert("RGB"))
         extrema = ela_im.getextrema()
         max_diff = max([ex[1] for ex in extrema])
@@ -143,8 +138,10 @@ class DocumentForensicSuite:
         ela_cv = cv2.cvtColor(np.array(ela_enhanced), cv2.COLOR_RGB2BGR)
         gray_ela = cv2.cvtColor(ela_cv, cv2.COLOR_BGR2GRAY)
         
-        _, thresh = cv2.threshold(gray_ela, 145, 255, cv2.THRESH_BINARY)
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+        # SENSITIVE THRESHOLD: Lowered from 145 to 42 to catch ink scribbles and markups
+        blur = cv2.GaussianBlur(gray_ela, (5, 5), 0)
+        _, thresh = cv2.threshold(blur, 42, 255, cv2.THRESH_BINARY)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
         closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
         
         contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -153,26 +150,28 @@ class DocumentForensicSuite:
         
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            if 100 < area < 35000:
+            # Catch scribbles, painted marks, edited numbers
+            if 60 < area < 25000:
                 x, y, w, h = cv2.boundingRect(cnt)
                 cv2.rectangle(annotated_cv, (x, y), (x + w, y + h), (0, 0, 255), 2)
-                cv2.putText(annotated_cv, "TAMPER", (x, max(y - 5, 15)),
+                cv2.putText(annotated_cv, "TAMPER", (x, max(y - 4, 12)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1, cv2.LINE_AA)
                 tamper_boxes += 1
                 
-        ela_stat = np.array(ela_enhanced)
-        ela_variance = float(np.std(ela_stat))
-        
+        ela_variance = float(np.std(np.array(ela_enhanced)))
         return ela_enhanced, annotated_cv, round(ela_variance, 2), tamper_boxes
 
     @staticmethod
     def audit_qr_code(img_cv: np.ndarray) -> dict:
-        detector = cv2.QRCodeDetector()
-        data, points, _ = detector.detectAndDecode(img_cv)
-        if points is not None and data:
-            return {
-                "detected": True,
-                "payload_snippet": data[:60] + ("..." if len(data) > 60 else ""),
-                "status": "QR Decoded Successfully"
-            }
+        try:
+            detector = cv2.QRCodeDetector()
+            data, points, _ = detector.detectAndDecode(img_cv)
+            if points is not None and data:
+                return {
+                    "detected": True,
+                    "payload_snippet": data[:60] + ("..." if len(data) > 60 else ""),
+                    "status": "QR Decoded Successfully"
+                }
+        except Exception:
+            pass
         return {"detected": False, "payload_snippet": "N/A", "status": "No readable QR code found"}
