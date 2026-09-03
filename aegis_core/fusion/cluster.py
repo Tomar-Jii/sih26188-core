@@ -1,7 +1,7 @@
 import numpy as np
 
 class SpatialRegionMerger:
-    """Merges confirmed tamper candidates and filters isolated text edge noise."""
+    """Merges spatial candidates into precise, tight tamper bounding zones."""
 
     @staticmethod
     def compute_iou(boxA: list, boxB: list) -> float:
@@ -23,7 +23,7 @@ class SpatialRegionMerger:
         return inter_area / denom if denom > 0 else 0.0
 
     @staticmethod
-    def is_nearby(boxA: list, boxB: list, max_distance: int = 12) -> bool:
+    def is_nearby(boxA: list, boxB: list, max_distance: int = 10) -> bool:
         a_x1, a_y1, a_x2, a_y2 = boxA[0], boxA[1], boxA[0] + boxA[2], boxA[1] + boxA[3]
         b_x1, b_y1, b_x2, b_y2 = boxB[0], boxB[1], boxB[0] + boxB[2], boxB[1] + boxB[3]
 
@@ -33,7 +33,7 @@ class SpatialRegionMerger:
         return x_dist <= max_distance and y_dist <= max_distance
 
     @classmethod
-    def merge_regions(cls, raw_regions: list, iou_thresh: float = 0.16, max_dist: int = 12, **kwargs) -> list:
+    def merge_regions(cls, raw_regions: list, iou_thresh: float = 0.15, max_dist: int = 10, **kwargs) -> list:
         thresh = kwargs.get("iou_threshold", kwargs.get("iou_thresh", iou_thresh))
         dist = kwargs.get("max_distance", kwargs.get("max_dist", max_dist))
 
@@ -64,19 +64,10 @@ class SpatialRegionMerger:
             y_max = max(b[1] + b[3] for b in all_boxes)
 
             signals = list(set([z.get("signal", "Spatial Anomaly") for z in cluster]))
-
-            # Ground truth signals that represent verified tampering
-            has_synthetic_markup = any("Synthetic Digital Ink" in s or "Markup" in s for s in signals)
-            has_strong_ela = any("Compression (ELA)" in s for s in signals)
-
-            # Drop candidate if it is merely isolated font/edge ringing on clean text
-            if not (has_synthetic_markup or has_strong_ela):
-                sorted_zones = remaining
-                continue
-
             is_multi_confirmed = len(signals) > 1
-            base_score = max(z.get("score", 0.85) for z in cluster)
-            final_score = min(0.98, base_score + (0.08 if is_multi_confirmed else 0.0))
+
+            base_score = max(z.get("score", 0.90) for z in cluster)
+            final_score = min(0.98, base_score + (0.05 if is_multi_confirmed else 0.0))
 
             merged.append({
                 "region_id": f"ZONE_{len(merged) + 1}",
