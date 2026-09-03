@@ -49,86 +49,60 @@ class DocumentForensicSuite:
 
     @staticmethod
     def validate_id_document_structure(img_cv: np.ndarray) -> dict:
-        """
-        Fail-safe Gatekeeper: Separates mobile UI screenshots from actual card uploads.
-        """
         h, w = img_cv.shape[:2]
         ratio = max(w, h) / min(w, h)
-        
-        # Phone screenshots are portrait 20:9 or 19:9 (ratio > 2.05)
         is_mobile_screenshot = (h > w) and (ratio > 1.95)
         
-        # Color distribution check: Aadhaar/PAN have high white/cream card base
         hsv = cv2.cvtColor(img_cv, cv2.COLOR_BGR2HSV)
-        # check brightness / saturation
-        sat = hsv[:, :, 1]
         val = hsv[:, :, 2]
-        is_dark_screen = np.mean(val) < 45  # Dark mode phone screenshots
+        is_dark_screen = np.mean(val) < 40
 
         is_valid = not is_mobile_screenshot and not is_dark_screen
-        
-        reason = "Valid Card Form Factor"
+        reason = "Valid Card Layout"
         if is_mobile_screenshot:
-            reason = "Detected Mobile Device Screenshot (Aspect ratio matches phone screen, not an ID card)."
+            reason = "Mobile UI Screenshot Aspect Ratio (Not a physical ID card)"
         elif is_dark_screen:
-            reason = "Detected Dark Mode Interface / Non-Document Canvas."
+            reason = "Dark mode UI / Low-light screen capture"
 
-        return {
-            "is_valid_id": is_valid,
-            "aspect_ratio": round(ratio, 2),
-            "reason": reason
-        }
+        return {"is_valid_id": is_valid, "reason": reason}
 
     @staticmethod
     def audit_exif_metadata(image: Image.Image) -> dict:
-        metadata = {}
         suspicious_tags = []
         editing_tools = ["photoshop", "gimp", "canva", "picsart", "coreldraw", "lightroom", "snapseed"]
-        
         info = image.getexif()
         if info:
             for tag_id, value in info.items():
-                tag_name = TAGS.get(tag_id, tag_id)
                 val_str = str(value).lower()
-                metadata[tag_name] = str(value)
                 for tool in editing_tools:
                     if tool in val_str:
-                        suspicious_tags.append(f"Editor footprint detected: '{tool.upper()}' in metadata")
-        
-        return {
-            "has_exif": len(metadata) > 0,
-            "software_traces": suspicious_tags,
-            "raw_metadata": metadata
-        }
+                        suspicious_tags.append(f"Trace of editor '{tool.upper()}' detected in metadata")
+        return {"software_traces": suspicious_tags}
 
     @staticmethod
     def analyze_moire_frequency(img_cv: np.ndarray) -> dict:
         try:
             gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
             gray = cv2.resize(gray, (512, 512))
-            
             dft = np.fft.fft2(gray)
             dft_shift = np.fft.fftshift(dft)
             magnitude_spectrum = 20 * np.log(np.abs(dft_shift) + 1e-9)
-            
             rows, cols = gray.shape
             crow, ccol = rows // 2, cols // 2
             magnitude_spectrum[crow-30:crow+30, ccol-30:ccol+30] = 0
-            
             papr = float(np.percentile(magnitude_spectrum, 99.8) / (np.mean(magnitude_spectrum) + 1e-5))
-            is_screen = papr > 3.65
-            return {"papr_score": round(papr, 3), "is_screen_recapture": is_screen}
+            return {"papr_score": round(papr, 3), "is_screen_recapture": papr > 3.85}
         except Exception:
             return {"papr_score": 1.0, "is_screen_recapture": False}
 
     @staticmethod
-    def localize_tampering(orig_img: Image.Image, quality: int = 88) -> tuple:
+    def localize_tampering(orig_img: Image.Image, quality: int = 90) -> tuple:
         buffered = io.BytesIO()
         orig_img.save(buffered, format="JPEG", quality=quality)
         buffered.seek(0)
         resaved = Image.open(buffered)
         
-        # High-precision Error Level difference
+        # High-res ELA computation
         ela_im = ImageChops.difference(orig_img.convert("RGB"), resaved.convert("RGB"))
         extrema = ela_im.getextrema()
         max_diff = max([ex[1] for ex in extrema])
@@ -138,28 +112,41 @@ class DocumentForensicSuite:
         ela_cv = cv2.cvtColor(np.array(ela_enhanced), cv2.COLOR_RGB2BGR)
         gray_ela = cv2.cvtColor(ela_cv, cv2.COLOR_BGR2GRAY)
         
-        # SENSITIVE THRESHOLD: Lowered from 145 to 42 to catch ink scribbles and markups
-        blur = cv2.GaussianBlur(gray_ela, (5, 5), 0)
-        _, thresh = cv2.threshold(blur, 42, 255, cv2.THRESH_BINARY)
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        # 1. ADAPTIVE STATISTICAL THRESHOLDING (Prevents clean text from triggering)
+        mean_val = np.mean(gray_ela)
+        std_val = np.std(gray_ela)
+        adaptive_thresh_val = max(int(mean_val + (2.6 * std_val)), 70)
+        
+        blur = cv2.GaussianBlur(gray_ela, (7, 7), 0)
+        _, thresh = cv2.threshold(blur, adaptive_thresh_val, 255, cv2.THRESH_BINARY)
+        
+        # 2. MORPHOLOGICAL CLUSTERING (Merges letters into single word bounding boxes)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 9))
         closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
         
         contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         annotated_cv = cv2.cvtColor(np.array(orig_img.convert("RGB")), cv2.COLOR_RGB2BGR)
+        
+        img_h, img_w = gray_ela.shape
+        total_img_area = img_h * img_w
         tamper_boxes = 0
         
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            # Catch scribbles, painted marks, edited numbers
-            if 60 < area < 25000:
+            # Filter noise and entire document outlines
+            if 350 < area < (total_img_area * 0.12):
                 x, y, w, h = cv2.boundingRect(cnt)
+                
+                # 3. QR CODE FILTER: Ignore regular square QR code regions on the right side
+                if area > 2800 and 0.82 < (w / float(h)) < 1.18 and x > (img_w * 0.45):
+                    continue
+                
                 cv2.rectangle(annotated_cv, (x, y), (x + w, y + h), (0, 0, 255), 2)
-                cv2.putText(annotated_cv, "TAMPER", (x, max(y - 4, 12)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1, cv2.LINE_AA)
+                cv2.putText(annotated_cv, "TAMPER", (x, max(y - 5, 15)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 0, 255), 2, cv2.LINE_AA)
                 tamper_boxes += 1
                 
-        ela_variance = float(np.std(np.array(ela_enhanced)))
-        return ela_enhanced, annotated_cv, round(ela_variance, 2), tamper_boxes
+        return ela_enhanced, annotated_cv, round(std_val, 2), tamper_boxes
 
     @staticmethod
     def audit_qr_code(img_cv: np.ndarray) -> dict:
@@ -167,11 +154,7 @@ class DocumentForensicSuite:
             detector = cv2.QRCodeDetector()
             data, points, _ = detector.detectAndDecode(img_cv)
             if points is not None and data:
-                return {
-                    "detected": True,
-                    "payload_snippet": data[:60] + ("..." if len(data) > 60 else ""),
-                    "status": "QR Decoded Successfully"
-                }
+                return {"detected": True, "status": "QR Decoded Successfully"}
         except Exception:
             pass
-        return {"detected": False, "payload_snippet": "N/A", "status": "No readable QR code found"}
+        return {"detected": False, "status": "No readable QR code found"}

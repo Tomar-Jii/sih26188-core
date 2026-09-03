@@ -37,10 +37,7 @@ async def audit_document(
         orig_pil = Image.open(io.BytesIO(raw_bytes))
         img_cv = cv2.imdecode(np.frombuffer(raw_bytes, np.uint8), cv2.IMREAD_COLOR)
 
-        # 1. Gatekeeper Check
         structure_check = forensic_suite.validate_id_document_structure(img_cv)
-
-        # 2. Forensic Layers
         exif_results = forensic_suite.audit_exif_metadata(orig_pil)
         moire_results = forensic_suite.analyze_moire_frequency(img_cv)
         ela_img, annotated_cv, ela_variance, tamper_boxes = forensic_suite.localize_tampering(orig_pil)
@@ -68,15 +65,16 @@ async def audit_document(
                         flags.append(f"Aadhaar Number [{clean_id}] failed Verhoeff Checksum: Digit sequence is fabricated.")
                 else:
                     verhoeff_status = "INVALID FORMAT"
-                    risk_score += 20
-                    flags.append("Specified ID number format does not comply with 12-digit standard.")
+                    risk_score += 15
+                    flags.append("Specified ID number format does not match 12-digit standard.")
 
-            if tamper_boxes > 0:
-                risk_score += min(tamper_boxes * 20, 60)
-                flags.append(f"Pixel Splicing/Scribble Detected: {tamper_boxes} anomalous regions localized in red boxes.")
-            elif ela_variance > 30.0:
+            # Dynamic Threat Scaling
+            if tamper_boxes >= 3:
+                risk_score += min(tamper_boxes * 15, 60)
+                flags.append(f"Pixel Splicing Confirmed: {tamper_boxes} distinct modified patches detected.")
+            elif tamper_boxes in [1, 2]:
                 risk_score += 25
-                flags.append("Compression level variance detected across document surface.")
+                flags.append(f"Localized Anomaly: {tamper_boxes} area(s) show non-uniform compression difference.")
 
             if exif_results["software_traces"]:
                 risk_score += 40
@@ -84,10 +82,10 @@ async def audit_document(
 
             if moire_results["is_screen_recapture"]:
                 risk_score += 35
-                flags.append(f"Screen Optical Moiré detected (PAPR: {moire_results['papr_score']}) - Screen photo, not physical card.")
+                flags.append(f"Screen Optical Moiré detected (Score: {moire_results['papr_score']}) - Recaptured from electronic display.")
 
             if not qr_results["detected"]:
-                flags.append("No standard cryptographic QR code decoded.")
+                flags.append("Document lacks readable QR barcode.")
 
             risk_score = min(max(risk_score, 4), 99)
             verdict = "FORGERY DETECTED" if risk_score >= 50 else ("SUSPICIOUS" if risk_score >= 25 else "GENUINE / AUTHENTIC")
