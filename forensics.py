@@ -147,6 +147,46 @@ class MultiSignalForensics:
             return {"papr_score": 1.0, "is_screen_recapture": False}
 
     @staticmethod
+    def extract_document_boundary_mask(img_cv: np.ndarray) -> np.ndarray:
+        """Extracts binary mask corresponding exclusively to the physical ID card polygon."""
+        h, w = img_cv.shape[:2]
+        gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY) if len(img_cv.shape) == 3 else img_cv
+        blurred = cv2.bilateralFilter(gray, 7, 50, 50)
+        edges = cv2.Canny(blurred, 30, 120)
+
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        closed_edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
+        contours, _ = cv2.findContours(closed_edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        total_area = h * w
+        card_contour = None
+
+        if contours:
+            sorted_cnts = sorted(contours, key=cv2.contourArea, reverse=True)
+            for c in sorted_cnts:
+                area = cv2.contourArea(c)
+                if (total_area * 0.25) < area < (total_area * 0.98):
+                    peri = cv2.arcLength(c, True)
+                    approx = cv2.approxPolyDP(c, 0.03 * peri, True)
+                    # Rectangular or rounded rectangle document shape
+                    if len(approx) in [4, 5, 6, 7, 8]:
+                        card_contour = approx
+                        break
+
+        mask = np.zeros((h, w), dtype=np.uint8)
+        if card_contour is not None:
+            cv2.drawContours(mask, [card_contour], -1, 255, -1)
+            # Inset mask slightly to eliminate physical card boundary edge artifacts
+            inset_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
+            mask = cv2.erode(mask, inset_kernel, iterations=1)
+        else:
+            # Fallback: segment bright document surface from darker wooden desk
+            _, thresh_doc = cv2.threshold(gray, 45, 255, cv2.THRESH_BINARY)
+            mask = thresh_doc
+
+        return mask
+
+    @staticmethod
     def localize_tampering_multisignal(orig_img: Image.Image, img_cv: np.ndarray) -> dict:
         rgb_pil = orig_img.convert("RGB")
         buffered = io.BytesIO()
@@ -154,8 +194,17 @@ class MultiSignalForensics:
         buffered.seek(0)
         resaved = Image.open(buffered)
 
+        orig_gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY) if len(img_cv.shape) == 3 else img_cv
+        h_img, w_img = orig_gray.shape
+        total_area = h_img * w_img
+
         # -----------------------------------------------------------------
-        # SIGNAL 1: Calibrated ELA (Floor locked to 52 to protect clean text)
+        # STEP 1: Surface Boundary Isolation (Isolates Card from Table)
+        # -----------------------------------------------------------------
+        card_mask = MultiSignalForensics.extract_document_boundary_mask(img_cv)
+
+        # -----------------------------------------------------------------
+        # SIGNAL 1: Multi-Band Chrominance & Luminance ELA
         # -----------------------------------------------------------------
         ela_im = ImageChops.difference(rgb_pil, resaved)
         extrema = ela_im.getextrema()
@@ -167,60 +216,62 @@ class MultiSignalForensics:
         diff_np = np.array(ela_im).astype(np.float32)
         channel_max = np.max(diff_np, axis=2).astype(np.uint8)
 
-        orig_gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY) if len(img_cv.shape) == 3 else img_cv
-        doc_mask = orig_gray > 40
-        valid_pixels = channel_max[doc_mask] if np.sum(doc_mask) > 500 else channel_max
-        mean_val = float(np.mean(valid_pixels))
-        std_val = float(np.std(valid_pixels))
+        # Compute baseline solely on card surface
+        card_pixels = channel_max[card_mask > 0]
+        if card_pixels.size > 200:
+            mean_val = float(np.mean(card_pixels))
+            std_val = float(np.std(card_pixels))
+        else:
+            mean_val, std_val = float(np.mean(channel_max)), float(np.std(channel_max))
 
-        dynamic_thresh = max(52, min(int(mean_val + (1.9 * std_val)), 76))
+        dynamic_thresh = max(42, min(int(mean_val + (1.65 * std_val)), 68))
         blur_ela = cv2.GaussianBlur(channel_max, (3, 3), 0)
         _, thresh_ela = cv2.threshold(blur_ela, dynamic_thresh, 255, cv2.THRESH_BINARY)
+        thresh_ela = cv2.bitwise_and(thresh_ela, thresh_ela, mask=card_mask)
 
         # -----------------------------------------------------------------
         # SIGNAL 2: Digital Pen & Markup Flatness Detector
-        # (Finds solid dark hand-drawn strokes where camera grain is missing)
+        # (Catches hand-drawn solid strokes, ink touchups, hair edits)
         # -----------------------------------------------------------------
         gray_f = orig_gray.astype(np.float32)
         local_mean = cv2.blur(gray_f, (5, 5))
         local_sq = cv2.blur(gray_f ** 2, (5, 5))
         local_std = np.sqrt(np.maximum(local_sq - (local_mean ** 2), 0.0))
 
-        # Real printed ink has camera noise (std > 6.0). Digital brush strokes have std < 3.2.
-        is_dark = orig_gray < 55
-        is_unnaturally_flat = local_std < 3.2
-        digital_stroke_mask = np.logical_and(is_dark, is_unnaturally_flat).astype(np.uint8) * 255
-
-        # Clean noise specks from digital stroke mask
-        kernel_stroke = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        digital_stroke_mask = cv2.morphologyEx(digital_stroke_mask, cv2.MORPH_OPEN, kernel_stroke)
+        # Real printed ink contains camera sensor shot noise (std > 5.5).
+        # Mobile markup brush tools produce near-uniform pixel values (std < 3.8).
+        is_dark_mark = orig_gray < 70
+        is_unnaturally_flat = local_std < 3.8
+        digital_stroke_mask = np.logical_and(is_dark_mark, is_unnaturally_flat).astype(np.uint8) * 255
+        digital_stroke_mask = cv2.bitwise_and(digital_stroke_mask, digital_stroke_mask, mask=card_mask)
 
         # -----------------------------------------------------------------
-        # Spatial Fusion: High-energy ELA OR Unnatural Digital Stroke
+        # Fusion & Morphological Extraction
         # -----------------------------------------------------------------
         combined_mask = cv2.bitwise_or(thresh_ela, digital_stroke_mask)
 
-        # Mask out large photo area border to avoid frame borders triggering
-        kernel_close = cv2.getStructuringElement(cv2.MORPH_RECT, (4, 4))
-        closed = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel_close)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (4, 4))
+        closed = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel)
 
         contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         annotated_cv = img_cv.copy() if len(img_cv.shape) == 3 else cv2.cvtColor(img_cv, cv2.COLOR_GRAY2BGR)
-        h_img, w_img = orig_gray.shape
-        total_area = h_img * w_img
 
         suspicious_regions = []
         box_count = 0
 
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            # Size boundary: Ignores tiny single-pixel camera dust (< 25px) and full-card borders (> 10% area)
-            if 25 < area < (total_area * 0.10):
+            # Area bounds: Captures small slashes (20px) up to sizable blocks
+            if 20 < area < (total_area * 0.12):
                 x, y, w, h = cv2.boundingRect(cnt)
                 aspect = float(w) / max(h, 1)
 
-                # Ignore printed card horizontal rules
-                if aspect > 6.0 and h < 8:
+                # Machine-printed dividing rules span >60% of card width with height < 6px
+                if w > (w_img * 0.60) and h <= 5:
+                    continue
+
+                # Filter uniform QR code matrix if present
+                if area > 2400 and 0.85 < aspect < 1.18 and x > (w_img * 0.40):
                     continue
 
                 cv2.rectangle(annotated_cv, (x, y), (x + w, y + h), (0, 0, 255), 2)
