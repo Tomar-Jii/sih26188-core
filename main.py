@@ -13,6 +13,7 @@ from aegis_core.ingestion.handler import StreamIngestionHandler, IngestionSecuri
 from aegis_core.quality.gatekeeper import DocumentQualityGate
 from aegis_core.vision.warp import DocumentPerspectiveWarper
 from aegis_core.vision.face_segment import BiometricPortraitAnalyzer
+from aegis_core.vision.font_audit import FontDisparityAnalyzer
 from aegis_core.classification.doc_classifier import DocumentClassifier
 from aegis_core.validators.dihedral import VerhoeffDihedralValidator
 from aegis_core.validators.mrz_td3 import ICAO9303MRZParser
@@ -97,7 +98,12 @@ async def execute_audit(
     trail.log(f"Biometric Portrait: {'Extracted' if face_res['face_detected'] else 'No Face Detected'} (Swap Gradient: {face_res['swap_score']})",
               "FLAGGED" if face_res["anomaly_detected"] else "PASS")
 
-    # Phase 11-16: Multi-Signal Spatial Scanners
+    # Phase 12 (NEW): Typographic Font Disparity & Baseline Audit
+    font_res = FontDisparityAnalyzer.audit(warped_cv, qr_bbox=qr_res.get("bbox"), face_bbox=face_res.get("bbox"))
+    if font_res["count"] > 0:
+        trail.log(f"Typographic Audit: {font_res['count']} Glyph Anomalies in {font_res['anomalous_rows']} Row(s)", "FLAGGED")
+
+    # Multi-Signal Spatial Scanners
     ela_res = DifferentialELAAnalyzer.analyze(orig_pil, warped_cv, qr_bbox=qr_res.get("bbox"))
     texture_res = TextureFlatnessAnalyzer.detect_digital_strokes(warped_cv, qr_bbox=qr_res.get("bbox"))
     gradient_res = EdgeDiscontinuityAnalyzer.audit(warped_cv, qr_bbox=qr_res.get("bbox"))
@@ -105,12 +111,13 @@ async def execute_audit(
     moire_res = OpticalMoireAnalyzer.inspect(warped_cv)
     meta_res = MetadataFootprintAnalyzer.inspect(orig_pil)
 
-    # Phase 6: Spatial NMS Clustering
+    # Phase 6: Spatial NMS Clustering (Aggregates ELA, Texture, Gradient, Noise, Font, and Photo-Swap candidates)
     raw_candidates = (
         ela_res.get("suspicious_zones", []) +
         texture_res.get("tamper_zones", []) +
         gradient_res.get("tamper_zones", []) +
-        noise_res.get("tamper_zones", [])
+        noise_res.get("tamper_zones", []) +
+        font_res.get("tamper_zones", [])
     )
     if face_res.get("tamper_zone"):
         raw_candidates.append(face_res["tamper_zone"])
@@ -180,6 +187,10 @@ async def execute_audit(
                 "detected": face_res["face_detected"],
                 "swap_score": face_res["swap_score"],
                 "anomaly_detected": face_res["anomaly_detected"]
+            },
+            "font_audit": {
+                "anomalies_detected": font_res["count"],
+                "anomalous_rows": font_res["anomalous_rows"]
             },
             "ela_variance": ela_res.get("ela_variance", 0.0),
             "texture_variance": texture_res.get("mean_variance", 0.0),
