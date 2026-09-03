@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
 from aegis_core.config import CONFIG
+from aegis_core.ingestion.handler import StreamIngestionHandler, IngestionSecurityError
 from aegis_core.quality.gatekeeper import DocumentQualityGate
 from aegis_core.vision.warp import DocumentPerspectiveWarper
 from aegis_core.vision.face_segment import BiometricPortraitAnalyzer
@@ -53,35 +54,27 @@ async def execute_audit(
     id_number: str = Form(""),
     mrz_raw_input: str = Form("")
 ):
-    # 1. Ingestion Validation
-    c_type = (file.content_type or "").lower()
-    if c_type and c_type not in CONFIG.ALLOWED_MIME_TYPES and not c_type.startswith("image/"):
-        return JSONResponse(status_code=415, content={"error": "UnsupportedMediaType", "detail": f"Allowed: {list(CONFIG.ALLOWED_MIME_TYPES)}"})
-
-    raw_bytes = await file.read()
-    if not raw_bytes or len(raw_bytes) > CONFIG.MAX_PAYLOAD_BYTES:
-        return JSONResponse(status_code=400, content={"error": "InvalidPayload", "detail": f"File size must be >0 and <{CONFIG.MAX_PAYLOAD_BYTES // (1024*1024)}MB."})
-
+    # Phase 11: Memory-Safe Stream Ingestion & Magic Byte Quarantine
     try:
-        orig_pil = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
-        img_cv = cv2.imdecode(np.frombuffer(raw_bytes, np.uint8), cv2.IMREAD_COLOR)
-        if img_cv is None or img_cv.size == 0: raise ValueError("Corrupted pixel buffer")
-    except Exception as e:
-        return JSONResponse(status_code=422, content={"error": "UnprocessableImage", "detail": str(e)})
+        raw_bytes, orig_pil, img_cv, verified_mime = await StreamIngestionHandler.ingest_and_sanitize(file)
+    except IngestionSecurityError as sec_err:
+        return JSONResponse(status_code=sec_err.status_code, content={"error": "IngestionSecurityFault", "detail": sec_err.message})
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"error": "InternalIngestionFault", "detail": str(exc)})
 
     trail = ForensicAuditTrail(case_id=case_id)
     sha256 = hashlib.sha256(raw_bytes).hexdigest()
-    trail.log("Document Ingested & Cryptographic Hash Registered", "VERIFIED")
+    trail.log(f"Stream Ingested & Quarantined (Verified Binary: {verified_mime})", "VERIFIED")
 
-    # 2. Phase 4 Quality Gate
+    # Phase 4: Quality Gate
     quality = DocumentQualityGate.audit(img_cv)
     q_status = quality["metrics"].get("blur_status", "Acceptable")
     trail.log(f"Pre-Screening Quality Gate: {q_status} Sharpness", "PASS" if quality["passed"] else "FLAGGED")
 
-    # 3. Phase 3 Boundary Perspective Normalization
+    # Phase 3: Boundary Perspective Normalization
     warped_cv = DocumentPerspectiveWarper.extract_and_warp(img_cv)
 
-    # 4. Phase 8 & 9 Deterministic Cryptographic Validators
+    # Phase 8 & 9: Deterministic Cryptographic Validators
     clean_id = id_number.replace(" ", "").strip()
     dihedral_valid = False
     if clean_id and len(clean_id) == 12 and clean_id.isdigit():
@@ -92,19 +85,19 @@ async def execute_audit(
     if mrz_res["is_mrz_detected"]:
         trail.log(f"ICAO Doc 9303 MRZ Checksum: {'PASS' if mrz_res['all_checks_passed'] else 'FAIL'}", "PASS" if mrz_res['all_checks_passed'] else "FLAGGED")
 
-    # 5. Phase 10 Multi-Pass QR Decoder & Masker
+    # Phase 10: Multi-Pass QR Decoder & Masker
     qr_res = MultiPassQREngine.inspect_and_mask(warped_cv)
 
-    # 6. Multi-Modal Document Classification
+    # Phase 8: Multi-Modal Document Classification
     classification_res = DocumentClassifier.classify(warped_cv, mrz_res=mrz_res, qr_res=qr_res)
     trail.log(f"Document Classification: {classification_res['document_type']} (Confidence: {int(classification_res['confidence']*100)}%)", "PASS")
 
-    # 7. Biometric Face Segmentation & Photo-Swap Audit
+    # Phase 7: Biometric Face Segmentation & Photo-Swap Audit
     face_res = BiometricPortraitAnalyzer.extract_and_audit(warped_cv)
     trail.log(f"Biometric Portrait: {'Extracted' if face_res['face_detected'] else 'No Face Detected'} (Swap Gradient: {face_res['swap_score']})",
               "FLAGGED" if face_res["anomaly_detected"] else "PASS")
 
-    # 8. Multi-Signal Spatial Scanners (ELA + Texture Flatness + Gradient + Noise + Moiré + Metadata)
+    # Phase 11-16: Multi-Signal Spatial Scanners
     ela_res = DifferentialELAAnalyzer.analyze(orig_pil, warped_cv, qr_bbox=qr_res.get("bbox"))
     texture_res = TextureFlatnessAnalyzer.detect_digital_strokes(warped_cv, qr_bbox=qr_res.get("bbox"))
     gradient_res = EdgeDiscontinuityAnalyzer.audit(warped_cv, qr_bbox=qr_res.get("bbox"))
@@ -112,7 +105,7 @@ async def execute_audit(
     moire_res = OpticalMoireAnalyzer.inspect(warped_cv)
     meta_res = MetadataFootprintAnalyzer.inspect(orig_pil)
 
-    # 9. Spatial NMS Clustering (Aggregates ELA, Texture, Gradient, Noise, and Photo-Swap candidates)
+    # Phase 6: Spatial NMS Clustering
     raw_candidates = (
         ela_res.get("suspicious_zones", []) +
         texture_res.get("tamper_zones", []) +
@@ -126,14 +119,14 @@ async def execute_audit(
     box_count = len(merged_regions)
     trail.log(f"Spatial Fusion (NMS): {box_count} Consolidated Tamper Zone(s)", "FLAGGED" if box_count > 0 else "PASS")
 
-    # 10. Cross-Field Coherence Matrix
+    # Phase 19: Cross-Field Coherence Matrix
     cross_field_res = CrossFieldConsistencyEngine.audit_consistency(
         ocr_fields={"doc_number": clean_id},
         mrz_data=mrz_res,
         qr_data=qr_res
     )
 
-    # 11. Weighted Risk Engine
+    # Phase 21: Weighted Risk Engine
     risk_data = MultiSignalRiskEngine.compute_risk(
         quality_result=quality,
         mrz_result=mrz_res,
@@ -146,11 +139,11 @@ async def execute_audit(
         cross_field_result=cross_field_res
     )
 
-    # 12. Confidence & Abstention Gate
+    # Phase 22: Confidence & Abstention Gate
     final_verdict = ConfidenceAbstentionGate.evaluate(quality, merged_regions, risk_data)
     trail.log(f"Risk Fusion Synthesis: Score {final_verdict['risk_score']}/100 ({final_verdict['risk_level']})", "COMPLETED")
 
-    # 13. Draw Annotations on Warped Canvas
+    # Draw Annotations on Warped Canvas
     annotated = warped_cv.copy()
     for reg in merged_regions:
         x, y, w, h = reg["bbox"]
@@ -158,7 +151,7 @@ async def execute_audit(
         cv2.rectangle(annotated, (x, y), (x + w, y + h), (0, 0, 255), 2)
         cv2.putText(annotated, tag, (x, max(y - 4, 12)), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 0, 255), 1)
 
-    # 14. Court-Admissible BSA 65B Dossier Builder
+    # Phase 25: Court-Admissible BSA 65B Dossier Builder
     dossier = BSADossierBuilder.build_certificate(
         case_id=trail.case_id,
         sha256_hash=sha256,
