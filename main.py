@@ -1,12 +1,11 @@
 import io
-import re
 import uuid
 import base64
 import cv2
 import numpy as np
-from datetime import datetime
-from PIL import Image
-from fastapi import FastAPI, File, UploadFile, Form, Request, HTTPException
+from datetime import datetime, timezone
+from PIL import Image, ImageOps, UnidentifiedImageError
+from fastapi import FastAPI, File, UploadFile, Form, Request, HTTPException, status
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
@@ -17,7 +16,19 @@ from forensics import (
     RiskFusionEngine
 )
 
-app = FastAPI(title="AegisID - Defense Grade Forensic Screener (SSB/MHA)")
+APP_VERSION = "1.0.0-phase1"
+MAX_UPLOAD_BYTES = 8 * 1024 * 1024
+ALLOWED_UPLOAD_MIME_TYPES = {
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/webp",
+    "image/bmp",
+    "image/tiff",
+}
+ALLOWED_PIL_FORMATS = {"JPEG", "PNG", "WEBP", "BMP", "TIFF"}
+
+app = FastAPI(title="AegisID - Forensic Screening Core")
 templates = Jinja2Templates(directory="templates")
 
 # In-Memory Case & Evidence Registry (Ephemeral & Private)
@@ -34,6 +45,76 @@ def pil_to_base64(img: Image.Image) -> str:
     img.save(buffered, format="PNG")
     return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
+
+def _error_response(status_code: int, code: str, message: str, case_id: str = "") -> JSONResponse:
+    payload = {
+        "error": {"code": code, "message": message},
+        "system_state": "ERROR",
+        "backend_version": APP_VERSION,
+    }
+    if case_id:
+        payload["case_id"] = case_id
+    return JSONResponse(status_code=status_code, content=payload)
+
+
+def _decode_image_safely(raw_bytes: bytes, uploaded_content_type: str) -> tuple[Image.Image, np.ndarray]:
+    if not raw_bytes:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=("EMPTY_UPLOAD", "Uploaded file is empty."))
+    if len(raw_bytes) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail=("FILE_TOO_LARGE", f"Upload exceeds the {MAX_UPLOAD_BYTES // (1024 * 1024)}MB limit."),
+        )
+
+    if uploaded_content_type and uploaded_content_type not in ALLOWED_UPLOAD_MIME_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=("UNSUPPORTED_MEDIA_TYPE", "Unsupported file type. Please upload a standard image format."),
+        )
+
+    try:
+        tmp = Image.open(io.BytesIO(raw_bytes))
+        image_format = (tmp.format or "").upper()
+        tmp.verify()
+    except (UnidentifiedImageError, OSError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=("MALFORMED_IMAGE", "Uploaded file is not a valid image or is corrupted."),
+        )
+
+    if image_format and image_format not in ALLOWED_PIL_FORMATS:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=("UNSUPPORTED_IMAGE_FORMAT", "Unsupported image encoding."),
+        )
+
+    try:
+        orig_pil = ImageOps.exif_transpose(Image.open(io.BytesIO(raw_bytes))).convert("RGB")
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=("MALFORMED_IMAGE", "Failed to safely decode image content."),
+        )
+
+    img_cv = cv2.imdecode(np.frombuffer(raw_bytes, np.uint8), cv2.IMREAD_UNCHANGED)
+    if img_cv is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=("MALFORMED_IMAGE", "Failed to decode image pixels."),
+        )
+
+    if len(img_cv.shape) == 2:
+        img_cv = cv2.cvtColor(img_cv, cv2.COLOR_GRAY2BGR)
+    elif len(img_cv.shape) == 3 and img_cv.shape[2] == 4:
+        img_cv = cv2.cvtColor(img_cv, cv2.COLOR_BGRA2BGR)
+    elif not (len(img_cv.shape) == 3 and img_cv.shape[2] == 3):
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=("UNSUPPORTED_IMAGE_CHANNELS", "Unsupported image channel layout."),
+        )
+
+    return orig_pil, img_cv
+
 @app.get("/", response_class=HTMLResponse)
 async def serve_dashboard(request: Request):
     return templates.TemplateResponse(request=request, name="index.html")
@@ -48,16 +129,20 @@ async def execute_complete_audit(
     """
     Primary Unified Screening Endpoint executing the complete 8-stage forensic pipeline.
     """
+    assigned_case = case_id if case_id else f"AEG-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
+
+    timestamp_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+    CASE_REGISTRY[assigned_case] = {
+        "case_id": assigned_case,
+        "system_state": "ANALYZING",
+        "timestamp": timestamp_iso,
+        "backend_version": APP_VERSION,
+    }
+
     try:
         raw_bytes = await file.read()
         sha256_hash = MultiSignalForensics.compute_sha256(raw_bytes)
-        
-        orig_pil = Image.open(io.BytesIO(raw_bytes))
-        img_cv = cv2.imdecode(np.frombuffer(raw_bytes, np.uint8), cv2.IMREAD_COLOR)
-        if img_cv is None:
-            raise ValueError("Unable to decode input as a valid graphical document.")
-
-        timestamp_iso = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%SZ")
+        orig_pil, img_cv = _decode_image_safely(raw_bytes, (file.content_type or "").lower())
 
         # 1. Quality Assessment Gate
         quality_eval = DocumentQualityEngine.assess_quality(img_cv)
@@ -105,10 +190,10 @@ async def execute_complete_audit(
             {"time": timestamp_iso, "event": f"Risk Engine Synthesis: Score {fusion_decision['risk_score']}/100 ({fusion_decision['risk_level']})", "status": "COMPLETED"}
         ]
 
-        assigned_case = case_id if case_id else f"AEG-{datetime.utcnow().strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
-
         result_payload = {
             "case_id": assigned_case,
+            "system_state": "COMPLETED",
+            "backend_version": APP_VERSION,
             "timestamp": timestamp_iso,
             "sha256": sha256_hash,
             "quality": quality_eval,
@@ -134,8 +219,32 @@ async def execute_complete_audit(
         CASE_REGISTRY[assigned_case] = result_payload
         return result_payload
 
-    except Exception as exc:
-        return JSONResponse(status_code=400, content={"error": "InspectionPipelineError", "details": str(exc)})
+    except HTTPException as exc:
+        err_code, err_msg = ("REQUEST_ERROR", "Unable to process request.")
+        if isinstance(exc.detail, tuple) and len(exc.detail) == 2:
+            err_code, err_msg = exc.detail
+        CASE_REGISTRY[assigned_case] = {
+            "case_id": assigned_case,
+            "system_state": "ERROR",
+            "backend_version": APP_VERSION,
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ"),
+            "error": {"code": err_code, "message": err_msg},
+        }
+        return _error_response(exc.status_code, err_code, err_msg, case_id=assigned_case)
+    except Exception:
+        CASE_REGISTRY[assigned_case] = {
+            "case_id": assigned_case,
+            "system_state": "ERROR",
+            "backend_version": APP_VERSION,
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ"),
+            "error": {"code": "INSPECTION_PIPELINE_ERROR", "message": "Unexpected internal error during screening."},
+        }
+        return _error_response(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            code="INSPECTION_PIPELINE_ERROR",
+            message="Unexpected internal error during screening.",
+            case_id=assigned_case,
+        )
 
 @app.get("/api/cases/{case_id}")
 async def fetch_case_record(case_id: str):

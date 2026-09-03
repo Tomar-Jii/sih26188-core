@@ -6,3 +6,5 @@ numpy
 scipy
 opencv-python-headless
 jinja2
+pytest
+httpx2

@@ -26,6 +26,9 @@ class ICAO9303Validator:
 
     @classmethod
     def parse_mrz(cls, raw_text: str) -> dict:
+        if not raw_text or not isinstance(raw_text, str):
+            return {"is_mrz_detected": False, "checks": {}, "all_checks_passed": False}
+
         lines = [line.strip().replace(" ", "").upper() for line in raw_text.splitlines() if len(line.strip()) >= 30]
         mrz_lines = [l for l in lines if re.match(r'^[A-Z0-9<]+$', l)]
         
@@ -117,7 +120,12 @@ class MultiSignalForensics:
     @staticmethod
     def analyze_moire_frequency(img_cv: np.ndarray) -> dict:
         try:
-            gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+            if len(img_cv.shape) == 2:
+                gray = img_cv
+            elif len(img_cv.shape) == 3 and img_cv.shape[2] == 4:
+                gray = cv2.cvtColor(img_cv, cv2.COLOR_BGRA2GRAY)
+            else:
+                gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
             gray = cv2.resize(gray, (512, 512))
             dft = np.fft.fft2(gray)
             dft_shift = np.fft.fftshift(dft)
@@ -134,12 +142,20 @@ class MultiSignalForensics:
 
     @staticmethod
     def localize_tampering_multisignal(orig_img: Image.Image, img_cv: np.ndarray) -> dict:
+        if len(img_cv.shape) == 2:
+            annotated_cv = cv2.cvtColor(img_cv, cv2.COLOR_GRAY2BGR)
+        elif len(img_cv.shape) == 3 and img_cv.shape[2] == 4:
+            annotated_cv = cv2.cvtColor(img_cv, cv2.COLOR_BGRA2BGR)
+        else:
+            annotated_cv = img_cv.copy()
+
+        safe_orig = orig_img.convert("RGB")
         buffered = io.BytesIO()
-        orig_img.save(buffered, format="JPEG", quality=90)
+        safe_orig.save(buffered, format="JPEG", quality=90)
         buffered.seek(0)
         resaved = Image.open(buffered)
 
-        ela_im = ImageChops.difference(orig_img.convert("RGB"), resaved.convert("RGB"))
+        ela_im = ImageChops.difference(safe_orig, resaved.convert("RGB"))
         extrema = ela_im.getextrema()
         max_diff = max([ex[1] for ex in extrema])
         scale = 255.0 / max_diff if max_diff != 0 else 1.0
@@ -151,24 +167,38 @@ class MultiSignalForensics:
         std_val = float(np.std(gray_ela))
         dynamic_thresh = max(45, min(int(mean_val + (1.8 * std_val)), 65))
 
-        blur_ela = cv2.GaussianBlur(gray_ela, (5, 5), 0)
+        h_img, w_img = gray_ela.shape
+        total_area = h_img * w_img
+        if total_area <= 0:
+            return {
+                "ela_enhanced": ela_enhanced,
+                "annotated_cv": annotated_cv,
+                "ela_variance": round(std_val, 2),
+                "tamper_regions": [],
+                "box_count": 0
+            }
+
+        blur_kx = 5 if w_img >= 5 else 3
+        blur_ky = 5 if h_img >= 5 else 3
+        blur_ela = cv2.GaussianBlur(gray_ela, (blur_kx, blur_ky), 0)
         _, thresh = cv2.threshold(blur_ela, dynamic_thresh, 255, cv2.THRESH_BINARY)
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 5))
+        kernel_w = 7 if w_img >= 7 else 3
+        kernel_h = 5 if h_img >= 5 else 3
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_w, kernel_h))
         closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
 
         contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        annotated_cv = img_cv.copy()
-        h_img, w_img = gray_ela.shape
-        total_area = h_img * w_img
 
         suspicious_regions = []
         box_count = 0
+        min_area = max(4, int(total_area * 0.0002))
+        max_area = max(min_area + 1, int(total_area * 0.14))
 
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            if 70 < area < (total_area * 0.14):
+            if min_area < area < max_area:
                 x, y, w, h = cv2.boundingRect(cnt)
-                aspect = float(w) / h
+                aspect = float(w) / max(h, 1)
                 if area > 2600 and 0.82 < aspect < 1.18 and x > (w_img * 0.40):
                     continue
 
@@ -241,7 +271,7 @@ class RiskFusionEngine:
 
         if final_risk >= 50:
             level = "HIGH"
-            verdict = "SUSPICIOUS / POTENTIAL FORGERY"
+            verdict = "SUSPICIOUS INDICATORS DETECTED"
             rec = "MANDATORY INVESTIGATOR FORENSIC REVIEW"
         elif final_risk >= 25:
             level = "MEDIUM"
@@ -249,7 +279,7 @@ class RiskFusionEngine:
             rec = "SECONDARY SCRUTINY RECOMMENDED"
         else:
             level = "LOW"
-            verdict = "AUTHENTIC / UNALTERED"
+            verdict = "NO STRONG ANOMALIES DETECTED"
             rec = "PROCEED WITH STANDARD PROCESSING"
 
         confidence_score = 0.88 if quality["passed"] else 0.72
