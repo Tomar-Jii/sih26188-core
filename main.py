@@ -65,9 +65,9 @@ async def execute_audit(
     except Exception as exc:
         return JSONResponse(status_code=400, content={"detail": f"Stream ingestion fault: {str(exc)}"})
 
-    # Mobile Upright EXIF Transpose for Live Face
+    # Ingest Live Face (accepts both native file upload and in-browser camera blobs)
     live_cv = None
-    if live_face is not None and live_face.filename:
+    if live_face is not None:
         try:
             live_bytes = await live_face.read()
             if len(live_bytes) > 0:
@@ -93,18 +93,7 @@ async def execute_audit(
             warped_cv = img_cv.copy()
         warped_pil = Image.fromarray(cv2.cvtColor(warped_cv, cv2.COLOR_BGR2RGB))
 
-        # 3. Deterministic Cryptographic Validators
-        clean_id = id_number.replace(" ", "").strip()
-        dihedral_valid = False
-        if clean_id and len(clean_id) == 12 and clean_id.isdigit():
-            dihedral_valid = VerhoeffDihedralValidator.validate(clean_id)
-            trail.log(f"Dihedral D5 Checksum ({clean_id[:4]} **** {clean_id[-4:]}): {'PASS' if dihedral_valid else 'FAIL'}", "PASS" if dihedral_valid else "FAIL")
-
-        mrz_res = ICAO9303MRZParser.parse(mrz_raw_input)
-        if mrz_res.get("is_mrz_detected"):
-            trail.log(f"ICAO Doc 9303 MRZ Checksum: {'PASS' if mrz_res.get('all_checks_passed') else 'FAIL'}", "PASS" if mrz_res.get('all_checks_passed') else "FLAGGED")
-
-        # 4. Multi-Pass Secure QR Decoder
+        # 3. Multi-Pass Secure QR Decoder
         qr_res = MultiPassQREngine.inspect_and_mask(warped_cv)
         all_qr_boxes = qr_res.get("bboxes", [])
         if qr_res.get("bbox") and qr_res.get("bbox") not in all_qr_boxes:
@@ -112,6 +101,25 @@ async def execute_audit(
 
         if qr_res.get("detected"):
             trail.log(f"Cryptographic Ground-Truth: {qr_res.get('status')}", "PASS")
+
+        # 4. Deterministic Cryptographic Validators (with QR Auto-Anchor)
+        clean_id = id_number.replace(" ", "").strip()
+        auto_uid = None
+        qr_payload = qr_res.get("payload")
+        if qr_payload and isinstance(qr_payload, dict):
+            auto_uid = qr_payload.get("uid")
+
+        eval_id = clean_id or auto_uid
+        dihedral_valid = None
+        if eval_id and len(eval_id) == 12 and eval_id.isdigit():
+            dihedral_valid = VerhoeffDihedralValidator.validate(eval_id)
+            trail.log(f"Dihedral D5 Checksum: {'PASS' if dihedral_valid else 'FAIL'}", "PASS" if dihedral_valid else "FAIL")
+        elif qr_res.get("detected"):
+            trail.log("Cryptographic Anchor: UIDAI Signed QR Verified", "PASS")
+
+        mrz_res = ICAO9303MRZParser.parse(mrz_raw_input)
+        if mrz_res.get("is_mrz_detected"):
+            trail.log(f"ICAO Doc 9303 MRZ Checksum: {'PASS' if mrz_res.get('all_checks_passed') else 'FAIL'}", "PASS" if mrz_res.get('all_checks_passed') else "FLAGGED")
 
         # 5. Document Classification
         classification_res = DocumentClassifier.classify(warped_cv, mrz_res=mrz_res, qr_res=qr_res)
@@ -122,14 +130,13 @@ async def execute_audit(
 
         # 7. Biometric Avatar Match (Card Photo vs Signed QR Avatar)
         face_match_res = {"evaluated": False, "match_status": "SKIPPED", "similarity_score": 1.0, "is_photo_swap": False}
-        qr_payload = qr_res.get("payload")
         if qr_payload and isinstance(qr_payload, dict) and qr_payload.get("has_photo") and face_res.get("face_detected"):
             face_match_res = BiometricFaceMatcher.compare_portraits(face_res["face_crop"], qr_payload.get("photo_bytes"))
             if face_match_res.get("evaluated"):
                 log_status = "PASS" if not face_match_res.get("is_photo_swap") else "FLAGGED"
                 trail.log(f"Biometric Avatar Audit: {face_match_res['match_status']} (Corr: {int(face_match_res['similarity_score']*100)}%)", log_status)
 
-        # 8. Live Selfie Face Match (Card Photo vs Upright User Camera)
+        # 8. Live Selfie Face Match (Card Photo vs User Camera)
         live_match_res = {"evaluated": False, "match_status": "SKIPPED", "similarity_score": 0.0, "is_match": True, "live_face_crop": None}
         if live_cv is not None and face_res.get("face_detected"):
             live_match_res = BiometricFaceMatcher.compare_live_face(face_res["face_crop"], live_cv)
@@ -161,7 +168,7 @@ async def execute_audit(
 
         # 11. Cross-Field Verification
         cross_field_res = CrossFieldConsistencyEngine.audit_consistency(
-            ocr_fields={"doc_number": clean_id},
+            ocr_fields={"doc_number": eval_id or ""},
             mrz_data=mrz_res,
             qr_data=qr_res
         )
@@ -176,8 +183,8 @@ async def execute_audit(
         risk_data = MultiSignalRiskEngine.compute_risk(
             quality_result=quality,
             mrz_result=mrz_res,
-            dihedral_valid=dihedral_valid,
-            id_number_present=bool(clean_id),
+            dihedral_valid=dihedral_valid if dihedral_valid is not None else False,
+            id_number_present=bool(eval_id),
             moire_result=moire_res,
             merged_regions=merged_regions,
             metadata_result=meta_res,
@@ -219,6 +226,7 @@ async def execute_audit(
             "deterministic": {
                 "mrz": mrz_res,
                 "dihedral_valid": dihedral_valid,
+                "eval_id_present": bool(eval_id),
                 "qr": qr_res,
                 "live_face_verification": live_match_res
             },
