@@ -14,12 +14,16 @@ from aegis_core.ingestion.handler import StreamIngestionHandler, IngestionSecuri
 from aegis_core.quality.gatekeeper import DocumentQualityGate
 from aegis_core.vision.warp import DocumentPerspectiveWarper
 from aegis_core.vision.face_segment import BiometricPortraitAnalyzer
+from aegis_core.vision.face_match import BiometricFaceMatcher
+from aegis_core.vision.font_audit import FontDisparityAnalyzer
 from aegis_core.classification.doc_classifier import DocumentClassifier
 from aegis_core.validators.dihedral import VerhoeffDihedralValidator
 from aegis_core.validators.mrz_td3 import ICAO9303MRZParser
 from aegis_core.validators.qr_engine import MultiPassQREngine
 from aegis_core.forensics.ela import DifferentialELAAnalyzer
 from aegis_core.forensics.texture import TextureFlatnessAnalyzer
+from aegis_core.forensics.gradient import EdgeDiscontinuityAnalyzer
+from aegis_core.forensics.noise import LocalNoiseAnalyzer
 from aegis_core.forensics.moire import OpticalMoireAnalyzer
 from aegis_core.forensics.metadata import MetadataFootprintAnalyzer
 from aegis_core.fusion.cross_field import CrossFieldConsistencyEngine
@@ -84,8 +88,10 @@ async def execute_audit(
             trail.log(f"Dihedral D5 Checksum ({clean_id[:4]} **** {clean_id[-4:]}): {'PASS' if dihedral_valid else 'FAIL'}", "PASS" if dihedral_valid else "FAIL")
 
         mrz_res = ICAO9303MRZParser.parse(mrz_raw_input)
+        if mrz_res.get("is_mrz_detected"):
+            trail.log(f"ICAO Doc 9303 MRZ Checksum: {'PASS' if mrz_res.get('all_checks_passed') else 'FAIL'}", "PASS" if mrz_res.get('all_checks_passed') else "FLAGGED")
 
-        # 4. Enterprise UIDAI QR Decoder
+        # 4. Multi-Pass Secure QR Decoder
         qr_res = MultiPassQREngine.inspect_and_mask(warped_cv)
         if qr_res.get("detected"):
             trail.log(f"Cryptographic Ground-Truth: {qr_res.get('status')}", "PASS")
@@ -97,26 +103,51 @@ async def execute_audit(
         # 6. Biometric Portrait Extraction
         face_res = BiometricPortraitAnalyzer.extract_and_audit(warped_cv)
 
-        # 7. Forensic Defacement Scanner
+        # 7. ADDITIVE: Biometric Cross-Vector Portrait Match (Card Photo vs Signed QR Avatar)
+        face_match_res = {"evaluated": False, "match_status": "SKIPPED", "similarity_score": 1.0, "is_photo_swap": False}
+        qr_payload = qr_res.get("payload")
+        if qr_payload and isinstance(qr_payload, dict) and qr_payload.get("has_photo") and face_res.get("face_detected"):
+            face_match_res = BiometricFaceMatcher.compare_portraits(face_res["face_crop"], qr_payload.get("photo_bytes"))
+            if face_match_res.get("evaluated"):
+                log_status = "PASS" if not face_match_res.get("is_photo_swap") else "FLAGGED"
+                trail.log(f"Biometric Avatar Audit: {face_match_res['match_status']} (Corr: {int(face_match_res['similarity_score']*100)}%)", log_status)
+
+        # 8. Forensic Defacement & Anomaly Scanners
         texture_res = TextureFlatnessAnalyzer.detect_digital_strokes(warped_cv, qr_bbox=qr_res.get("bbox"))
         ela_res = DifferentialELAAnalyzer.analyze(warped_pil, warped_cv, qr_bbox=qr_res.get("bbox"))
+        gradient_res = EdgeDiscontinuityAnalyzer.audit(warped_cv, qr_bbox=qr_res.get("bbox"))
+        noise_res = LocalNoiseAnalyzer.audit(warped_cv, qr_bbox=qr_res.get("bbox"))
         moire_res = OpticalMoireAnalyzer.inspect(warped_cv)
         meta_res = MetadataFootprintAnalyzer.inspect(orig_pil)
 
-        # 8. Spatial Region Merger (NMS)
+        # 9. Spatial Region Merger (NMS)
         raw_candidates = texture_res.get("tamper_zones", [])
+        if face_match_res.get("is_photo_swap") and face_res.get("bbox"):
+            fx, fy, fw, fh = face_res["bbox"]
+            raw_candidates.append({
+                "bbox": [int(fx), int(fy), int(fw), int(fh)],
+                "score": 0.99,
+                "signal": "Biometric Avatar Mismatch (Cryptographic Photo-Swap)"
+            })
+
         merged_regions = SpatialRegionMerger.merge_regions(raw_candidates, iou_thresh=0.15)
         box_count = len(merged_regions)
         trail.log(f"Spatial Fusion (NMS): {box_count} Defacement Zone(s) Isolated", "FLAGGED" if box_count > 0 else "PASS")
 
-        # 9. Cross-Field Verification
+        # 10. Cross-Field Verification
         cross_field_res = CrossFieldConsistencyEngine.audit_consistency(
             ocr_fields={"doc_number": clean_id},
             mrz_data=mrz_res,
             qr_data=qr_res
         )
 
-        # 10. Risk Engine Synthesis
+        # 11. Risk Engine Synthesis
+        photo_swap_data = {
+            "face_detected": face_res.get("face_detected", False),
+            "anomaly_detected": face_match_res.get("is_photo_swap", False) or face_res.get("anomaly_detected", False),
+            "swap_score": 0.95 if face_match_res.get("is_photo_swap") else 0.05
+        }
+
         risk_data = MultiSignalRiskEngine.compute_risk(
             quality_result=quality,
             mrz_result=mrz_res,
@@ -125,22 +156,22 @@ async def execute_audit(
             moire_result=moire_res,
             merged_regions=merged_regions,
             metadata_result=meta_res,
-            photo_swap_result=face_res,
+            photo_swap_result=photo_swap_data,
             cross_field_result=cross_field_res
         )
 
-        # 11. Confidence & Abstention
+        # 12. Confidence & Abstention
         final_verdict = ConfidenceAbstentionGate.evaluate(quality, merged_regions, risk_data)
         trail.log(f"Risk Fusion Synthesis: Score {final_verdict['risk_score']}/100 ({final_verdict['risk_level']})", "COMPLETED")
 
-        # 12. Annotate Canvas
+        # 13. Annotate Canvas
         annotated = warped_cv.copy()
         for reg in merged_regions:
             x, y, w, h = reg["bbox"]
             cv2.rectangle(annotated, (x, y), (x + w, y + h), (0, 0, 255), 2)
             cv2.putText(annotated, "TAMPER", (x, max(y - 4, 12)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1)
 
-        # 13. BSA 65B Dossier Builder
+        # 14. BSA 65B Dossier Builder
         dossier = BSADossierBuilder.build_certificate(
             case_id=trail.case_id,
             sha256_hash=sha256,
@@ -167,11 +198,18 @@ async def execute_audit(
                 "regions": merged_regions,
                 "face": {
                     "detected": face_res.get("face_detected", False),
-                    "swap_score": 0.05,
-                    "anomaly_detected": False
+                    "swap_score": photo_swap_data["swap_score"],
+                    "anomaly_detected": photo_swap_data["anomaly_detected"],
+                    "face_match": {
+                        "evaluated": face_match_res.get("evaluated", False),
+                        "similarity_score": face_match_res.get("similarity_score", 1.0),
+                        "status": face_match_res.get("match_status", "SKIPPED")
+                    }
                 },
                 "ela_variance": ela_res.get("ela_variance", 0.0),
-                "texture_variance": 0.0,
+                "texture_variance": texture_res.get("mean_variance", 0.0),
+                "gradient_mean": gradient_res.get("mean_gradient", 0.0),
+                "noise_variance": noise_res.get("global_variance", 0.0),
                 "moire": moire_res
             },
             "metadata": meta_res,
