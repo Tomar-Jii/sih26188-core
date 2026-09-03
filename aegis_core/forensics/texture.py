@@ -18,11 +18,10 @@ class TextureFlatnessAnalyzer:
         local_sq = cv2.blur(gray_f ** 2, (5, 5))
         local_std = np.sqrt(np.maximum(local_sq - (local_mean ** 2), 0.0))
 
-        # Real printed ink under camera lighting has diffuse paper grain (gray 40-75, std > 3.2).
-        # Mobile gallery markup / digital pen is synthetic pitch-black (gray < 32) with near-zero grain (std < 2.0).
-        is_synthetic_black = gray < 32
-        is_zero_grain = local_std < 2.0
-        raw_stroke_mask = np.logical_and(is_synthetic_black, is_zero_grain).astype(np.uint8) * 255
+        # Digital brush markups: dark stroke (gray < 50) with synthetic flatness (local_std < 2.8)
+        is_dark = gray < 50
+        is_flat_brush = local_std < 2.8
+        raw_stroke_mask = np.logical_and(is_dark, is_flat_brush).astype(np.uint8) * 255
 
         if qr_bbox:
             qx, qy, qw, qh = qr_bbox
@@ -30,7 +29,7 @@ class TextureFlatnessAnalyzer:
             cv2.rectangle(raw_stroke_mask, (max(0, qx - pad), max(0, qy - pad)),
                           (min(w_img, qx + qw + pad), min(h_img, qy + qh + pad)), 0, -1)
 
-        # Remove tiny specks
+        # Ignore tiny normal character dots (< 40px)
         kernel_clean = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         cleaned = cv2.morphologyEx(raw_stroke_mask, cv2.MORPH_OPEN, kernel_clean)
         kernel_connect = cv2.getStructuringElement(cv2.MORPH_RECT, (4, 4))
@@ -41,8 +40,8 @@ class TextureFlatnessAnalyzer:
 
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            # Digital scribbles/cross-outs have substantial continuous area (> 60px)
-            if 60 < area < (total_area * 0.15):
+            # Focus on drawn markup lines and patches (area > 45px)
+            if 45 < area < (total_area * 0.15):
                 x, y, w, h = cv2.boundingRect(cnt)
                 aspect = float(w) / max(h, 1)
 

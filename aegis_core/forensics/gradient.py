@@ -2,22 +2,7 @@ import cv2
 import numpy as np
 
 class EdgeDiscontinuityAnalyzer:
-    """Detects cut-and-paste boundary halos, sharp clipping borders, and splicing edge steps."""
-
-    @staticmethod
-    def evaluate_boundary_gradient(img_cv: np.ndarray, bbox: list) -> float:
-        gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY) if len(img_cv.shape) == 3 else img_cv
-        x, y, w, h = bbox
-        pad = 3
-        y1, y2 = max(0, y - pad), min(gray.shape[0], y + h + pad)
-        x1, x2 = max(0, x - pad), min(gray.shape[1], x + w + pad)
-        band = gray[y1:y2, x1:x2]
-        if band.size == 0:
-            return 0.0
-
-        sobel_x = cv2.Sobel(band, cv2.CV_64F, 1, 0, ksize=3)
-        sobel_y = cv2.Sobel(band, cv2.CV_64F, 0, 1, ksize=3)
-        return round(float(min(np.mean(np.sqrt(sobel_x ** 2 + sobel_y ** 2)) / 128.0, 1.0)), 3)
+    """Detects rectangular cut-and-paste boundary halos, ignoring normal typography."""
 
     @classmethod
     def audit(cls, img_cv: np.ndarray, qr_bbox: list = None) -> dict:
@@ -35,9 +20,10 @@ class EdgeDiscontinuityAnalyzer:
 
         mean_g = float(np.mean(grad_norm))
         std_g = float(np.std(grad_norm))
-        high_thresh = max(90, min(int(mean_g + (2.2 * std_g)), 140))
+        high_thresh = max(115, min(int(mean_g + (2.6 * std_g)), 160))
         _, edge_mask = cv2.threshold(grad_norm, high_thresh, 255, cv2.THRESH_BINARY)
 
+        # Suppress standard horizontal document lines
         kernel_h = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 1))
         detected_lines = cv2.morphologyEx(edge_mask, cv2.MORPH_OPEN, kernel_h)
         clean_mask = cv2.bitwise_and(edge_mask, cv2.bitwise_not(detected_lines))
@@ -48,20 +34,21 @@ class EdgeDiscontinuityAnalyzer:
             cv2.rectangle(clean_mask, (max(0, qx - pad), max(0, qy - pad)),
                           (min(w_img, qx + qw + pad), min(h_img, qy + qh + pad)), 0, -1)
 
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (4, 4))
         bridged = cv2.morphologyEx(clean_mask, cv2.MORPH_CLOSE, kernel)
         contours, _ = cv2.findContours(bridged, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         tamper_zones = []
 
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            if 16 < area < (total_area * 0.08):
+            # Only large enclosing splicing halos (> 120px), completely skipping text characters
+            if 120 < area < (total_area * 0.08):
                 x, y, w, h = cv2.boundingRect(cnt)
                 if float(w) / max(h, 1) > 6.0 and h < 6:
                     continue
                 tamper_zones.append({
                     "bbox": [int(x), int(y), int(w), int(h)],
-                    "score": 0.89,
+                    "score": 0.88,
                     "signal": "Boundary Gradient Step / Splicing Halo"
                 })
 

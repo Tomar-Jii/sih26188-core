@@ -1,7 +1,7 @@
 import numpy as np
 
 class SpatialRegionMerger:
-    """Merges overlapping tamper candidates and filters isolated unverified false positives."""
+    """Merges overlapping tamper candidates and strictly requires a Primary Anchor signal."""
 
     @staticmethod
     def compute_iou(boxA: list, boxB: list) -> float:
@@ -63,32 +63,26 @@ class SpatialRegionMerger:
             x_max = max(b[0] + b[2] for b in all_boxes)
             y_max = max(b[1] + b[3] for b in all_boxes)
 
-            box_w = x_max - x_min
-            box_h = y_max - y_min
-            box_area = box_w * box_h
-
             signals = list(set([z.get("signal", "Spatial Anomaly") for z in cluster]))
-            is_multi_confirmed = len(signals) > 1
 
+            # PRIMARY ANCHORS: Real physical tampering signatures
             has_digital_ink = any("Digital Ink" in s for s in signals)
+            has_strong_ela = any("Compression (ELA)" in s for s in signals)
             has_photo_swap = any("Photo-Swap" in s for s in signals)
+            has_primary_anchor = has_digital_ink or has_strong_ela or has_photo_swap
 
-            # Reject single-character-sized boxes on normal text unless confirmed by digital ink
-            if box_area < 80 and not has_digital_ink:
+            # CRITICAL SHIELD: If there is no primary anchor (only gradient/noise/font on text edges), REJECT IT!
+            if not has_primary_anchor:
                 sorted_zones = remaining
                 continue
 
-            # Drop isolated unconfirmed single signals
-            if not is_multi_confirmed and not has_digital_ink and not has_photo_swap:
-                sorted_zones = remaining
-                continue
-
+            is_multi_confirmed = len(signals) > 1
             base_score = max(z.get("score", 0.85) for z in cluster)
             final_score = min(0.98, base_score + (0.08 if is_multi_confirmed else 0.0))
 
             merged.append({
                 "region_id": f"ZONE_{len(merged) + 1}",
-                "bbox": [int(x_min), int(y_min), int(box_w), int(box_h)],
+                "bbox": [int(x_min), int(y_min), int(x_max - x_min), int(y_max - y_min)],
                 "score": round(final_score, 2),
                 "signals": signals,
                 "multi_signal_verified": is_multi_confirmed
