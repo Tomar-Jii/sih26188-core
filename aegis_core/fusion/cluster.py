@@ -1,7 +1,7 @@
 import numpy as np
 
 class SpatialRegionMerger:
-    """Merges overlapping tamper candidates and filters unverified single-signal false alarms."""
+    """Merges overlapping tamper candidates and filters isolated unverified false positives."""
 
     @staticmethod
     def compute_iou(boxA: list, boxB: list) -> float:
@@ -63,15 +63,23 @@ class SpatialRegionMerger:
             x_max = max(b[0] + b[2] for b in all_boxes)
             y_max = max(b[1] + b[3] for b in all_boxes)
 
+            box_w = x_max - x_min
+            box_h = y_max - y_min
+            box_area = box_w * box_h
+
             signals = list(set([z.get("signal", "Spatial Anomaly") for z in cluster]))
             is_multi_confirmed = len(signals) > 1
 
-            # Strong signals that are permitted to trigger alone
-            has_primary_stroke = any("Digital Ink" in s or "Compression" in s or "Photo-Swap" in s for s in signals)
+            has_digital_ink = any("Digital Ink" in s for s in signals)
+            has_photo_swap = any("Photo-Swap" in s for s in signals)
 
-            # FALSE POSITIVE SHIELD:
-            # Drop candidate if it is just an isolated edge/font/noise artifact on normal printed text
-            if not is_multi_confirmed and not has_primary_stroke:
+            # Reject single-character-sized boxes on normal text unless confirmed by digital ink
+            if box_area < 80 and not has_digital_ink:
+                sorted_zones = remaining
+                continue
+
+            # Drop isolated unconfirmed single signals
+            if not is_multi_confirmed and not has_digital_ink and not has_photo_swap:
                 sorted_zones = remaining
                 continue
 
@@ -80,7 +88,7 @@ class SpatialRegionMerger:
 
             merged.append({
                 "region_id": f"ZONE_{len(merged) + 1}",
-                "bbox": [int(x_min), int(y_min), int(x_max - x_min), int(y_max - y_min)],
+                "bbox": [int(x_min), int(y_min), int(box_w), int(box_h)],
                 "score": round(final_score, 2),
                 "signals": signals,
                 "multi_signal_verified": is_multi_confirmed

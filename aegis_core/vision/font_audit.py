@@ -1,8 +1,9 @@
+import re
 import cv2
 import numpy as np
 
 class FontDisparityAnalyzer:
-    """Audits typographic baseline alignment with strict filtering for multi-script (Indic/Latin) documents."""
+    """Audits typographic alignment strictly on numerical identifier rows (UID / DOB)."""
 
     @classmethod
     def audit(cls, img_cv: np.ndarray, qr_bbox: list = None, face_bbox: list = None) -> dict:
@@ -16,7 +17,7 @@ class FontDisparityAnalyzer:
         enhanced = clahe.apply(gray)
         _, thresh = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
-        # Quarantine QR Code & Face
+        # Quarantine non-text zones
         if qr_bbox:
             qx, qy, qw, qh = qr_bbox
             pad = 10
@@ -37,8 +38,8 @@ class FontDisparityAnalyzer:
             x, y, w, h = cv2.boundingRect(cnt)
             aspect = float(w) / max(h, 1)
 
-            # Strict character bounds
-            if 25 < area < 800 and 10 <= h <= 36 and 0.20 <= aspect <= 1.8:
+            # Strict digit bounding geometry
+            if 35 < area < 900 and 12 <= h <= 40 and 0.25 <= aspect <= 1.2:
                 glyphs.append({
                     "bbox": (x, y, w, h),
                     "baseline_y": y + h,
@@ -54,29 +55,33 @@ class FontDisparityAnalyzer:
         current_row = [glyphs_sorted[0]]
 
         for g in glyphs_sorted[1:]:
-            if abs(g["cy"] - current_row[-1]["cy"]) <= 6:
+            if abs(g["cy"] - current_row[-1]["cy"]) <= 5:
                 current_row.append(g)
             else:
-                if len(current_row) >= 5:
+                if len(current_row) >= 4:
                     rows.append(current_row)
                 current_row = [g]
 
-        if len(current_row) >= 5:
+        if len(current_row) >= 4:
             rows.append(current_row)
 
         tamper_zones = []
         anomalous_rows = 0
 
         for row in rows:
-            baselines = [g["baseline_y"] for g in row]
-            heights = [g["height"] for g in row]
+            # Only audit rows positioned in the number / date sectors (lower 50% or DOB area)
+            mean_y = float(np.mean([g["cy"] for g in row]))
+            if mean_y < (h_img * 0.30):
+                continue
 
+            heights = [g["height"] for g in row]
+            baselines = [g["baseline_y"] for g in row]
+            std_h = float(np.std(heights))
             median_base = float(np.median(baselines))
             median_h = float(np.median(heights))
-            std_h = float(np.std(heights))
 
-            # Indic scripts naturally have std_h > 3.0 due to matras; skip checking baseline on Hindi rows
-            if std_h > 3.5:
+            # If row height variance is high, it's multi-script Hindi/English text, skip it!
+            if std_h > 2.8:
                 continue
 
             row_flagged = False
@@ -84,13 +89,13 @@ class FontDisparityAnalyzer:
                 base_drift = abs(g["baseline_y"] - median_base)
                 height_drift = abs(g["height"] - median_h)
 
-                # Extreme outlier check (spliced foreign digits in numbers/dates)
-                if base_drift >= 7.0 or height_drift >= max(6.0, 2.5 * std_h):
+                # Flag spliced digits with obvious size mismatch or baseline jump
+                if base_drift >= 7.0 or height_drift >= max(6.0, 2.8 * std_h):
                     x, y, w, h = g["bbox"]
                     tamper_zones.append({
                         "bbox": [int(x), int(y), int(w), int(h)],
                         "score": 0.85,
-                        "signal": "Typographic Disparity (Altered Character)"
+                        "signal": "Typographic Disparity (Altered Digit)"
                     })
                     row_flagged = True
 
