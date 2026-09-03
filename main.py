@@ -12,6 +12,7 @@ from aegis_core.config import CONFIG
 from aegis_core.quality.gatekeeper import DocumentQualityGate
 from aegis_core.vision.warp import DocumentPerspectiveWarper
 from aegis_core.vision.face_segment import BiometricPortraitAnalyzer
+from aegis_core.classification.doc_classifier import DocumentClassifier
 from aegis_core.validators.dihedral import VerhoeffDihedralValidator
 from aegis_core.validators.mrz_td3 import ICAO9303MRZParser
 from aegis_core.validators.qr_engine import MultiPassQREngine
@@ -92,18 +93,22 @@ async def execute_audit(
     # 5. Phase 10 Multi-Pass QR Decoder & Masker
     qr_res = MultiPassQREngine.inspect_and_mask(warped_cv)
 
-    # 6. Phase 7 Biometric Face Segmentation & Photo-Swap Audit
+    # 6. Phase 8 (NEW): Multi-Modal Document Classification
+    classification_res = DocumentClassifier.classify(warped_cv, mrz_res=mrz_res, qr_res=qr_res)
+    trail.log(f"Document Classification: {classification_res['document_type']} (Confidence: {int(classification_res['confidence']*100)}%)", "PASS")
+
+    # 7. Phase 7 Biometric Face Segmentation & Photo-Swap Audit
     face_res = BiometricPortraitAnalyzer.extract_and_audit(warped_cv)
     trail.log(f"Biometric Portrait: {'Extracted' if face_res['face_detected'] else 'No Face Detected'} (Swap Gradient: {face_res['swap_score']})",
               "FLAGGED" if face_res["anomaly_detected"] else "PASS")
 
-    # 7. Phase 11, 14, 15, 16 Multi-Signal Spatial Scanners
+    # 8. Phase 11, 14, 15, 16 Multi-Signal Spatial Scanners
     ela_res = DifferentialELAAnalyzer.analyze(orig_pil, warped_cv, qr_bbox=qr_res.get("bbox"))
     texture_res = TextureFlatnessAnalyzer.detect_digital_strokes(warped_cv, qr_bbox=qr_res.get("bbox"))
     moire_res = OpticalMoireAnalyzer.inspect(warped_cv)
     meta_res = MetadataFootprintAnalyzer.inspect(orig_pil)
 
-    # 8. Phase 6 Spatial NMS Clustering
+    # 9. Phase 6 Spatial NMS Clustering
     raw_candidates = ela_res.get("suspicious_zones", []) + texture_res.get("tamper_zones", [])
     if face_res.get("tamper_zone"):
         raw_candidates.append(face_res["tamper_zone"])
@@ -112,14 +117,14 @@ async def execute_audit(
     box_count = len(merged_regions)
     trail.log(f"Spatial Fusion (NMS): {box_count} Consolidated Tamper Zone(s)", "FLAGGED" if box_count > 0 else "PASS")
 
-    # 9. Phase 19 Cross-Field Coherence Matrix
+    # 10. Phase 19 Cross-Field Coherence Matrix
     cross_field_res = CrossFieldConsistencyEngine.audit_consistency(
         ocr_fields={"doc_number": clean_id},
         mrz_data=mrz_res,
         qr_data=qr_res
     )
 
-    # 10. Phase 21 Weighted Risk Engine
+    # 11. Phase 21 Weighted Risk Engine
     risk_data = MultiSignalRiskEngine.compute_risk(
         quality_result=quality,
         mrz_result=mrz_res,
@@ -132,11 +137,11 @@ async def execute_audit(
         cross_field_result=cross_field_res
     )
 
-    # 11. Phase 22 Confidence & Abstention Gate
+    # 12. Phase 22 Confidence & Abstention Gate
     final_verdict = ConfidenceAbstentionGate.evaluate(quality, merged_regions, risk_data)
     trail.log(f"Risk Fusion Synthesis: Score {final_verdict['risk_score']}/100 ({final_verdict['risk_level']})", "COMPLETED")
 
-    # 12. Draw Annotations on Warped Canvas
+    # 13. Draw Annotations on Warped Canvas
     annotated = warped_cv.copy()
     for reg in merged_regions:
         x, y, w, h = reg["bbox"]
@@ -144,7 +149,7 @@ async def execute_audit(
         cv2.rectangle(annotated, (x, y), (x + w, y + h), (0, 0, 255), 2)
         cv2.putText(annotated, tag, (x, max(y - 4, 12)), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 0, 255), 1)
 
-    # 13. Phase 25 Court-Admissible BSA 65B Dossier Builder
+    # 14. Phase 25 Court-Admissible BSA 65B Dossier Builder
     dossier = BSADossierBuilder.build_certificate(
         case_id=trail.case_id,
         sha256_hash=sha256,
@@ -159,6 +164,7 @@ async def execute_audit(
         "version": CONFIG.APP_VERSION,
         "case_id": trail.case_id,
         "sha256": sha256,
+        "classification": classification_res,
         "quality": quality,
         "deterministic": {
             "mrz": mrz_res,
