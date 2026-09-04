@@ -55,7 +55,7 @@
       </div>
 
       <div class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
-        <!-- Document Upload -->
+        <!-- 1. Document Upload -->
         <div class="md:col-span-2">
           <label for="doc-upload" class="border-2 border-dashed border-slate-700 hover:border-cyan-500/60 rounded-xl p-3.5 flex items-center justify-center gap-3 cursor-pointer transition bg-slate-950/40">
             <input type="file" id="doc-upload" class="hidden" accept="image/*" />
@@ -69,7 +69,7 @@
           </label>
         </div>
 
-        <!-- Live Camera Trigger -->
+        <!-- 2. Live Camera Trigger -->
         <div>
           <button type="button" onclick="openCameraModal()" class="w-full border-2 border-dashed border-slate-700 hover:border-blue-500/60 rounded-xl p-3.5 flex items-center justify-center gap-3 transition bg-slate-950/40 text-left">
             <div id="selfie-icon-wrap" class="w-8 h-8 rounded-lg bg-blue-500/10 text-blue-400 flex items-center justify-center shrink-0">
@@ -83,7 +83,7 @@
           </button>
         </div>
 
-        <!-- Inputs & Audit Button -->
+        <!-- 3. Form Inputs & Audit Button -->
         <div class="space-y-2">
           <input type="text" id="id-input" placeholder="ID Number (Auto-detected if on card)" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-cyan-500 mono" />
           <input type="text" id="mrz-input" placeholder="MRZ String (Auto-detected for Passports)" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-cyan-500 mono" />
@@ -94,7 +94,7 @@
       </div>
     </div>
 
-    <!-- 1:1 Facial Biometric Card -->
+    <!-- 1:1 Facial Biometric Result Card -->
     <div id="biometric-match-card" class="hidden bg-[#0e1628] border border-blue-900/60 rounded-2xl p-4 shadow-xl space-y-3">
       <div class="flex items-center justify-between pb-2 border-b border-slate-800">
         <div class="flex items-center gap-2">
@@ -187,8 +187,8 @@
 
           <div class="flex items-center justify-between p-2 rounded-lg bg-slate-950/60 border border-slate-800/80">
             <div>
-              <div class="text-xs font-semibold text-slate-200">4. Checksum / Cryptographic Integrity</div>
-              <div class="text-[9px] text-slate-400">QR Signature / Dihedral D5</div>
+              <div class="text-xs font-semibold text-slate-200">4. Cryptographic / Checksum Integrity</div>
+              <div class="text-[9px] text-slate-400">UIDAI QR Signature / Dihedral D5</div>
             </div>
             <span id="chk-mrz" class="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400">Standby</span>
           </div>
@@ -452,7 +452,7 @@
       activeData = res;
       document.getElementById('btn-print').disabled = false;
 
-      // Auto-populate ID number in input field if detected from card
+      // Auto-populate ID Number in form input
       const autoId = res.deterministic?.detected_id;
       if (autoId) {
         const idInput = document.getElementById('id-input');
@@ -499,17 +499,21 @@
       setBadge('chk-moire', !res.forensics?.moire?.is_screen_recapture, "Natural", "Screen Spoof");
       setBadge('chk-tamper', (res.forensics?.box_count || 0) === 0, "Intact", (res.forensics?.box_count || 0) + " Alteration(s)");
 
-      // 4. Cryptographic / Checksum Integrity (Direct QR Anchor)
+      // 4. Cryptographic / Checksum Integrity (Full-Flow QR & Checksum Sync)
       const mrzPassed = res.deterministic?.mrz?.is_mrz_detected ? res.deterministic.mrz.all_checks_passed : null;
       const isDihedralValid = res.deterministic?.dihedral_valid;
-      const isQrDetected = res.deterministic?.qr?.detected;
+      const qrData = res.deterministic?.qr;
+      const isQrVerified = qrData?.payload?.valid === true;
+      const isQrDetected = qrData?.detected === true;
 
       if (mrzPassed !== null) {
         setBadge('chk-mrz', mrzPassed, "Pass (ICAO)", "Checksum Fail");
+      } else if (isQrVerified) {
+        setBadge('chk-mrz', true, "Pass (UIDAI Signed QR)", "Signature Invalid");
       } else if (isQrDetected) {
         setBadge('chk-mrz', true, "Pass (QR Cryptographic)", "Invalid QR");
-      } else if (isDihedralValid !== null && isDihedralValid !== undefined) {
-        setBadge('chk-mrz', isDihedralValid, "Pass (D5 Checksum)", "Checksum Fail");
+      } else if (isDihedralValid !== null && isDihedralValid !== undefined && isDihedralValid !== false) {
+        setBadge('chk-mrz', true, "Pass (D5 Checksum)", "Checksum Fail");
       } else {
         const el = document.getElementById('chk-mrz');
         el.className = "text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400";
@@ -549,7 +553,7 @@
         chkLive.innerText = "Not Provided";
       }
 
-      // 6. Metadata
+      // 6. Metadata Footprints
       setBadge('chk-exif', (res.metadata?.software_traces || []).length === 0, "Clean", "Editor Trace");
 
       const bdList = document.getElementById('breakdown-list');

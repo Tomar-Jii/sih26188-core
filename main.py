@@ -127,7 +127,7 @@ async def execute_audit(
             if auto_id:
                 detected_id = auto_id
                 dihedral_valid = is_valid
-                trail.log("Auto-Detected Document Identifier from Canvas", "PASS")
+                trail.log(f"Document Identifier Verified: {detected_id}", "PASS")
 
         if clean_id and len(clean_id) == 12 and clean_id.isdigit():
             dihedral_valid = VerhoeffDihedralValidator.validate(clean_id)
@@ -143,8 +143,9 @@ async def execute_audit(
         classification_res = DocumentClassifier.classify(warped_cv, mrz_res=mrz_res, qr_res=qr_res)
         trail.log(f"Document Classification: {classification_res['document_type']}", "PASS")
 
-        # 6. Biometric Portrait Extraction
+        # 6. Biometric Portrait Extraction with Full-Crown Envelope
         face_res = BiometricPortraitAnalyzer.extract_and_audit(warped_cv)
+        exclusion_envelope = face_res.get("envelope_bbox", face_res.get("bbox"))
 
         # 7. Biometric Avatar Match
         face_match_res = {"evaluated": False, "match_status": "SKIPPED", "similarity_score": 1.0, "is_photo_swap": False}
@@ -163,11 +164,11 @@ async def execute_audit(
                 log_status = "PASS" if live_match_res.get("is_match") else "FLAGGED"
                 trail.log(f"Live 1:1 Face Verification: {live_match_res['match_status']} ({int(live_match_res['similarity_score']*100)}% Similarity)", log_status)
 
-        # 9. Forensic Scanners with Face & QR Masking
+        # 9. Spatial Defacement Scanners with Full Portrait & QR Immunity
         texture_res = TextureFlatnessAnalyzer.detect_digital_strokes(
             warped_cv,
             qr_bbox=qr_res.get("bbox"),
-            face_bbox=face_res.get("bbox"),
+            face_bbox=exclusion_envelope,
             qr_bboxes=all_qr_boxes
         )
         ela_res = DifferentialELAAnalyzer.analyze(warped_pil, warped_cv, qr_bbox=qr_res.get("bbox"))

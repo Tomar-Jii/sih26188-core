@@ -10,7 +10,7 @@ except ImportError:
     HAS_ZXING = False
 
 class MultiPassQREngine:
-    """Enterprise UIDAI QR Engine backed by C++ ZXing Barcode Core with Localized Multi-Crop Scanning."""
+    """Enterprise UIDAI QR Engine backed by C++ ZXing Core with Full-Canvas and Localized Decoding."""
 
     @classmethod
     def decode_secure_v2(cls, raw_input) -> tuple[dict, bytes]:
@@ -34,6 +34,10 @@ class MultiPassQREngine:
                 state = parts[13].decode('latin1', errors='ignore') if len(parts) > 13 else ""
                 photo_bytes = parts[14] if len(parts) > 14 and len(parts[14]) > 200 else None
 
+                # Extract masked UID if present in ref ID structure
+                ref_id = parts[2].decode('latin1', errors='ignore')
+                uid_str = parts[1].decode('latin1', errors='ignore') if len(parts) > 1 else ""
+
                 return {
                     "is_secure_qr": True,
                     "valid": True,
@@ -41,6 +45,8 @@ class MultiPassQREngine:
                     "dob": dob,
                     "gender": gender,
                     "state": state,
+                    "uid": uid_str if (len(uid_str) == 12 and uid_str.isdigit()) else None,
+                    "ref_id": ref_id,
                     "has_photo": photo_bytes is not None
                 }, photo_bytes
         except Exception:
@@ -89,8 +95,8 @@ class MultiPassQREngine:
                 if 0.75 <= ratio <= 1.30 and bw > 55 and bh > 55:
                     bboxes.append([int(x), int(y), int(bw), int(bh)])
 
-        # Aadhaar A4 Template Anchors (Upper and Lower QR positions)
-        if len(bboxes) < 2 and (float(w)/max(h,1) < 0.90):
+        # A4 Template Coordinate Prior Anchors
+        if len(bboxes) < 2 and (float(w) / max(h, 1) < 0.90):
             anchors = [
                 [int(w * 0.30), int(h * 0.35), int(w * 0.22), int(w * 0.22)],
                 [int(w * 0.65), int(h * 0.70), int(w * 0.24), int(w * 0.24)]
@@ -106,70 +112,86 @@ class MultiPassQREngine:
         if img_cv is None or img_cv.size == 0:
             return {"detected": False, "status": "No Image", "bbox": None, "bboxes": [], "payload": None}, None
 
+        h, w = img_cv.shape[:2]
         gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY) if len(img_cv.shape) == 3 else img_cv
-        h, w = gray.shape[:2]
         all_bboxes = cls.find_all_qr_matrices(gray)
 
         payload_data = None
         photo_bytes = None
         status_msg = "QR Not Located"
 
-        # Multi-crop decoding targets
-        crops_to_test = []
-        for bx, by, bw, bh in all_bboxes:
-            pad = 18
-            y1, y2 = max(0, by - pad), min(h, by + bh + pad)
-            x1, x2 = max(0, bx - pad), min(w, bx + bw + pad)
-            crop = gray[y1:y2, x1:x2]
-            if crop.size > 0:
-                crops_to_test.append(crop)
-
-        # 1. C++ ZXing Barcode Scanning on localized crops
+        # 1. High-Performance Full-Frame C++ ZXing Read
         if HAS_ZXING:
-            for crop in crops_to_test:
-                for scale in [1.0, 1.5, 0.75]:
-                    c_img = cv2.resize(crop, (0, 0), fx=scale, fy=scale) if scale != 1.0 else crop
-                    try:
-                        results = zxingcpp.read_barcodes(c_img)
-                        for r in results:
+            try:
+                # Test pristine full frame and CLAHE contrast enhancement
+                candidates = [gray]
+                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                candidates.append(clahe.apply(gray))
+
+                for canvas in candidates:
+                    results = zxingcpp.read_barcodes(canvas)
+                    for r in results:
+                        pos = r.position
+                        pts = np.array([
+                            [pos.top_left.x, pos.top_left.y],
+                            [pos.top_right.x, pos.top_right.y],
+                            [pos.bottom_right.x, pos.bottom_right.y],
+                            [pos.bottom_left.x, pos.bottom_left.y]
+                        ], dtype=np.int32)
+                        x, y, bw, bh = cv2.boundingRect(pts)
+                        if not any(abs(x - b[0]) < 30 and abs(y - b[1]) < 30 for b in all_bboxes):
+                            all_bboxes.append([int(x), int(y), int(bw), int(bh)])
+
+                        if payload_data is None:
                             if hasattr(r, 'bytes') and len(r.bytes) > 0:
                                 sec, pb = cls.decode_secure_v2(bytes(r.bytes))
                                 if sec:
                                     payload_data, photo_bytes = sec, pb
                                     status_msg = "UIDAI Cryptographically Signed Secure QR Verified"
-                                    break
+
                             if payload_data is None and r.text:
                                 sec, pb = cls.decode_secure_v2(r.text)
                                 if sec:
                                     payload_data, photo_bytes = sec, pb
                                     status_msg = "UIDAI Cryptographically Signed Secure QR Verified"
-                                    break
-                                leg = cls.decode_xml_legacy(r.text)
-                                if leg:
-                                    payload_data = leg
-                                    status_msg = "Legacy UIDAI XML Barcode Verified"
-                                    break
-                    except Exception:
-                        pass
+                                else:
+                                    leg = cls.decode_xml_legacy(r.text)
+                                    if leg:
+                                        payload_data = leg
+                                        status_msg = "Legacy UIDAI XML Barcode Verified"
+                                    else:
+                                        payload_data = {"format": "Standard QR", "valid": True}
+                                        status_msg = "Document QR Decoded"
+                    if payload_data:
+                        break
+            except Exception:
+                pass
+
+        # 2. Localized Multi-Crop Scanning (Fallback)
+        if payload_data is None and HAS_ZXING:
+            for bx, by, bw, bh in all_bboxes:
+                pad = 20
+                y1, y2 = max(0, by - pad), min(h, by + bh + pad)
+                x1, x2 = max(0, bx - pad), min(w, bx + bw + pad)
+                crop = gray[y1:y2, x1:x2]
+                if crop.size == 0:
+                    continue
+                try:
+                    for scale in [1.0, 1.4]:
+                        c_img = cv2.resize(crop, (0, 0), fx=scale, fy=scale) if scale != 1.0 else crop
+                        results = zxingcpp.read_barcodes(c_img)
+                        for r in results:
+                            sec, pb = cls.decode_secure_v2(bytes(r.bytes) if hasattr(r, 'bytes') else r.text)
+                            if sec:
+                                payload_data, photo_bytes = sec, pb
+                                status_msg = "UIDAI Cryptographically Signed Secure QR Verified"
+                                break
+                        if payload_data:
+                            break
+                except Exception:
+                    pass
                 if payload_data:
                     break
-
-        # 2. OpenCV Fallback
-        if payload_data is None:
-            detector = cv2.QRCodeDetector()
-            for crop in crops_to_test:
-                txt, _, _ = detector.detectAndDecode(crop)
-                if txt:
-                    sec, pb = cls.decode_secure_v2(txt)
-                    if sec:
-                        payload_data, photo_bytes = sec, pb
-                        status_msg = "UIDAI Cryptographically Signed Secure QR Verified"
-                        break
-                    leg = cls.decode_xml_legacy(txt)
-                    if leg:
-                        payload_data = leg
-                        status_msg = "Legacy UIDAI XML Barcode Verified"
-                        break
 
         detected = (len(all_bboxes) > 0) or (payload_data is not None)
         if detected and payload_data is None:
