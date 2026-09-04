@@ -2,10 +2,10 @@ import cv2
 import numpy as np
 
 class TextureFlatnessAnalyzer:
-    """Isolates real manual defacements while preserving legitimate document components."""
+    """Isolates real manual defacements while strictly exempting legitimate portrait hair and QR matrices."""
 
     @classmethod
-    def detect_digital_strokes(cls, img_cv: np.ndarray, qr_bbox: list = None, **kwargs) -> dict:
+    def detect_digital_strokes(cls, img_cv: np.ndarray, qr_bbox: list = None, face_bbox: list = None, **kwargs) -> dict:
         if img_cv is None or img_cv.size == 0:
             return {"tamper_zones": [], "count": 0, "mean_variance": 0.0}
 
@@ -18,7 +18,7 @@ class TextureFlatnessAnalyzer:
             all_qr_boxes.append(qr_bbox)
 
         # ---------------------------------------------------------------------
-        # 1. MANUAL DIGITAL BRUSH DOODLES (Zero Entropy Synthetic Ink)
+        # 1. SYNTHETIC MARKUP / DOODLE SCANNER
         # ---------------------------------------------------------------------
         b, g, r = cv2.split(img_cv)
         chroma_diff = np.abs(r.astype(np.int16) - g.astype(np.int16)) + \
@@ -30,17 +30,33 @@ class TextureFlatnessAnalyzer:
         local_sq = cv2.blur(gray_f ** 2, (3, 3))
         local_std = np.sqrt(np.maximum(local_sq - (local_mean ** 2), 0.0))
 
-        # Synthetic markup is flat pitch-black with zero chromatic deviation
-        is_synthetic_markup = (gray < 35) & (chroma_diff <= 2) & (local_std < 1.8)
+        # Real printed ink and photographic hair have diffuse camera grain.
+        # Synthetic markup is flat pitch-black with zero chromatic deviation.
+        is_synthetic_markup = (gray < 32) & (chroma_diff <= 2) & (local_std < 1.6)
         markup_mask = is_synthetic_markup.astype(np.uint8) * 255
 
-        # Mask ALL QR matrices
+        # CRITICAL: Mask out Document Portrait to prevent natural hair false alarms
+        if face_bbox:
+            fx, fy, fw, fh = face_bbox
+            pad_f = 6
+            cv2.rectangle(
+                markup_mask,
+                (max(0, fx - pad_f), max(0, fy - pad_f)),
+                (min(w_img, fx + fw + pad_f), min(h_img, fy + fh + pad_f)),
+                0, -1
+            )
+
+        # Mask out ALL QR Matrices
         for qx, qy, qw, qh in all_qr_boxes:
             pad = 16
-            cv2.rectangle(markup_mask, (max(0, qx - pad), max(0, qy - pad)),
-                          (min(w_img, qx + qw + pad), min(h_img, qy + qh + pad)), 0, -1)
+            cv2.rectangle(
+                markup_mask,
+                (max(0, qx - pad), max(0, qy - pad)),
+                (min(w_img, qx + qw + pad), min(h_img, qy + qh + pad)),
+                0, -1
+            )
 
-        # Mask Government Emblems
+        # Mask out Standard Emblems
         cv2.rectangle(markup_mask, (0, 0), (int(w_img * 0.22), int(h_img * 0.22)), 0, -1)
         cv2.rectangle(markup_mask, (int(w_img * 0.75), 0), (w_img, int(h_img * 0.22)), 0, -1)
 
@@ -52,7 +68,7 @@ class TextureFlatnessAnalyzer:
         cnts_markup, _ = cv2.findContours(connected_markup, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         for cnt in cnts_markup:
             area = cv2.contourArea(cnt)
-            if 45 < area < (h_img * w_img * 0.12):
+            if 50 < area < (h_img * w_img * 0.12):
                 x, y, w, h = cv2.boundingRect(cnt)
                 aspect = float(w) / max(h, 1)
                 if aspect > 7.0 and h < 6:
@@ -71,6 +87,10 @@ class TextureFlatnessAnalyzer:
             pad = 16
             cv2.rectangle(binary, (max(0, qx - pad), max(0, qy - pad)),
                           (min(w_img, qx + qw + pad), min(h_img, qy + qh + pad)), 0, -1)
+
+        if face_bbox:
+            fx, fy, fw, fh = face_bbox
+            cv2.rectangle(binary, (fx, fy), (fx + fw, fy + fh), 0, -1)
 
         k_strike = cv2.getStructuringElement(cv2.MORPH_RECT, (38, 3))
         thick_strikes = cv2.morphologyEx(binary, cv2.MORPH_OPEN, k_strike)

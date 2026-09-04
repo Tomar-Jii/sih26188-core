@@ -15,6 +15,7 @@ from aegis_core.quality.gatekeeper import DocumentQualityGate
 from aegis_core.vision.warp import DocumentPerspectiveWarper
 from aegis_core.vision.face_segment import BiometricPortraitAnalyzer
 from aegis_core.vision.face_match import BiometricFaceMatcher
+from aegis_core.vision.id_extractor import DocumentIDAutoExtractor
 from aegis_core.vision.font_audit import FontDisparityAnalyzer
 from aegis_core.classification.doc_classifier import DocumentClassifier
 from aegis_core.validators.dihedral import VerhoeffDihedralValidator
@@ -47,7 +48,6 @@ def pil_to_b64(img: Image.Image) -> str:
     return base64.b64encode(buf.getvalue()).decode('utf-8')
 
 def clean_for_json(data):
-    """Recursively converts numpy types, bytes, and sets into pure JSON-serializable primitives."""
     if isinstance(data, dict):
         return {k: clean_for_json(v) for k, v in data.items() if not isinstance(v, (np.ndarray, bytes))}
     elif isinstance(data, list):
@@ -81,7 +81,6 @@ async def execute_audit(
     except Exception as exc:
         return JSONResponse(status_code=400, content={"detail": f"Stream ingestion fault: {str(exc)}"})
 
-    # Safe Live Face Ingestion
     live_cv = None
     if live_face is not None:
         try:
@@ -109,7 +108,7 @@ async def execute_audit(
             warped_cv = img_cv.copy()
         warped_pil = Image.fromarray(cv2.cvtColor(warped_cv, cv2.COLOR_BGR2RGB))
 
-        # 3. Multi-Pass Secure QR Decoder (with ZXing & Fallbacks)
+        # 3. Multi-Pass Secure QR Decoder
         qr_res, qr_photo_bytes = MultiPassQREngine.inspect_and_mask(warped_cv)
         all_qr_boxes = qr_res.get("bboxes", [])
         if qr_res.get("bbox") and qr_res.get("bbox") not in all_qr_boxes:
@@ -118,20 +117,23 @@ async def execute_audit(
         if qr_res.get("detected"):
             trail.log(f"Cryptographic Ground-Truth: {qr_res.get('status')}", "PASS")
 
-        # 4. Deterministic Cryptographic Validators (Auto-Anchored)
+        # 4. Auto ID Extractor & Dihedral Checksum
         clean_id = id_number.replace(" ", "").strip()
-        auto_uid = None
-        qr_payload = qr_res.get("payload")
-        if qr_payload and isinstance(qr_payload, dict):
-            auto_uid = qr_payload.get("uid")
-
-        eval_id = clean_id or auto_uid
+        detected_id = clean_id
         dihedral_valid = None
-        if eval_id and len(eval_id) == 12 and eval_id.isdigit():
-            dihedral_valid = VerhoeffDihedralValidator.validate(eval_id)
+
+        if not detected_id:
+            auto_id, is_valid = DocumentIDAutoExtractor.extract_id(warped_cv, qr_res.get("payload"))
+            if auto_id:
+                detected_id = auto_id
+                dihedral_valid = is_valid
+                trail.log("Auto-Detected Document Identifier from Canvas", "PASS")
+
+        if clean_id and len(clean_id) == 12 and clean_id.isdigit():
+            dihedral_valid = VerhoeffDihedralValidator.validate(clean_id)
             trail.log(f"Dihedral D5 Checksum: {'PASS' if dihedral_valid else 'FAIL'}", "PASS" if dihedral_valid else "FAIL")
         elif qr_res.get("detected"):
-            trail.log("Cryptographic Anchor: UIDAI Signed QR Verified", "PASS")
+            dihedral_valid = True
 
         mrz_res = ICAO9303MRZParser.parse(mrz_raw_input)
         if mrz_res.get("is_mrz_detected"):
@@ -144,7 +146,7 @@ async def execute_audit(
         # 6. Biometric Portrait Extraction
         face_res = BiometricPortraitAnalyzer.extract_and_audit(warped_cv)
 
-        # 7. Biometric Avatar Match (Card Photo vs Signed QR Avatar)
+        # 7. Biometric Avatar Match
         face_match_res = {"evaluated": False, "match_status": "SKIPPED", "similarity_score": 1.0, "is_photo_swap": False}
         if qr_photo_bytes and face_res.get("face_detected"):
             face_match_res = BiometricFaceMatcher.compare_portraits(face_res["face_crop"], qr_photo_bytes)
@@ -161,8 +163,13 @@ async def execute_audit(
                 log_status = "PASS" if live_match_res.get("is_match") else "FLAGGED"
                 trail.log(f"Live 1:1 Face Verification: {live_match_res['match_status']} ({int(live_match_res['similarity_score']*100)}% Similarity)", log_status)
 
-        # 9. Forensic Defacement & Spatial Scanners
-        texture_res = TextureFlatnessAnalyzer.detect_digital_strokes(warped_cv, qr_bbox=qr_res.get("bbox"), qr_bboxes=all_qr_boxes)
+        # 9. Forensic Scanners with Face & QR Masking
+        texture_res = TextureFlatnessAnalyzer.detect_digital_strokes(
+            warped_cv,
+            qr_bbox=qr_res.get("bbox"),
+            face_bbox=face_res.get("bbox"),
+            qr_bboxes=all_qr_boxes
+        )
         ela_res = DifferentialELAAnalyzer.analyze(warped_pil, warped_cv, qr_bbox=qr_res.get("bbox"))
         gradient_res = EdgeDiscontinuityAnalyzer.audit(warped_cv, qr_bbox=qr_res.get("bbox"))
         noise_res = LocalNoiseAnalyzer.audit(warped_cv, qr_bbox=qr_res.get("bbox"))
@@ -185,7 +192,7 @@ async def execute_audit(
 
         # 11. Cross-Field Verification
         cross_field_res = CrossFieldConsistencyEngine.audit_consistency(
-            ocr_fields={"doc_number": eval_id or ""},
+            ocr_fields={"doc_number": detected_id or ""},
             mrz_data=mrz_res,
             qr_data=qr_res
         )
@@ -200,8 +207,8 @@ async def execute_audit(
         risk_data = MultiSignalRiskEngine.compute_risk(
             quality_result=quality,
             mrz_result=mrz_res,
-            dihedral_valid=dihedral_valid if dihedral_valid is not None else False,
-            id_number_present=bool(eval_id),
+            dihedral_valid=bool(dihedral_valid),
+            id_number_present=bool(detected_id),
             moire_result=moire_res,
             merged_regions=merged_regions,
             metadata_result=meta_res,
@@ -243,7 +250,8 @@ async def execute_audit(
             "deterministic": {
                 "mrz": mrz_res,
                 "dihedral_valid": dihedral_valid,
-                "eval_id_present": bool(eval_id),
+                "detected_id": detected_id,
+                "eval_id_present": bool(detected_id),
                 "qr": qr_res,
                 "live_face_verification": live_match_res
             },

@@ -55,7 +55,7 @@
       </div>
 
       <div class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
-        <!-- 1. Document Upload -->
+        <!-- Document Upload -->
         <div class="md:col-span-2">
           <label for="doc-upload" class="border-2 border-dashed border-slate-700 hover:border-cyan-500/60 rounded-xl p-3.5 flex items-center justify-center gap-3 cursor-pointer transition bg-slate-950/40">
             <input type="file" id="doc-upload" class="hidden" accept="image/*" />
@@ -69,7 +69,7 @@
           </label>
         </div>
 
-        <!-- 2. Live Camera / Selfie Trigger Button -->
+        <!-- Live Camera Trigger -->
         <div>
           <button type="button" onclick="openCameraModal()" class="w-full border-2 border-dashed border-slate-700 hover:border-blue-500/60 rounded-xl p-3.5 flex items-center justify-center gap-3 transition bg-slate-950/40 text-left">
             <div id="selfie-icon-wrap" class="w-8 h-8 rounded-lg bg-blue-500/10 text-blue-400 flex items-center justify-center shrink-0">
@@ -83,7 +83,7 @@
           </button>
         </div>
 
-        <!-- 3. Form Inputs & Audit Button -->
+        <!-- Inputs & Audit Button -->
         <div class="space-y-2">
           <input type="text" id="id-input" placeholder="ID Number (Auto-detected if on card)" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-cyan-500 mono" />
           <input type="text" id="mrz-input" placeholder="MRZ String (Auto-detected for Passports)" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-cyan-500 mono" />
@@ -94,7 +94,7 @@
       </div>
     </div>
 
-    <!-- 1:1 Facial Biometric Verification Result Card -->
+    <!-- 1:1 Facial Biometric Card -->
     <div id="biometric-match-card" class="hidden bg-[#0e1628] border border-blue-900/60 rounded-2xl p-4 shadow-xl space-y-3">
       <div class="flex items-center justify-between pb-2 border-b border-slate-800">
         <div class="flex items-center gap-2">
@@ -105,7 +105,6 @@
       </div>
 
       <div class="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
-        <!-- Card Document Portrait -->
         <div class="flex items-center gap-3 bg-slate-950/60 p-3 rounded-xl border border-slate-800/80">
           <img id="bio-card-face" class="w-16 h-16 rounded-xl object-cover bg-slate-900 border border-slate-700" />
           <div>
@@ -114,7 +113,6 @@
           </div>
         </div>
 
-        <!-- Match Vector Metrics -->
         <div class="text-center space-y-1.5 px-2">
           <span class="text-[10px] uppercase font-bold text-slate-400">Multi-Space Similarity Index</span>
           <div id="bio-score-text" class="text-xl font-extrabold text-blue-400 mono">--%</div>
@@ -124,7 +122,6 @@
           <span id="bio-score-desc" class="text-[10px] text-slate-400 block">--</span>
         </div>
 
-        <!-- Live Captured Selfie -->
         <div class="flex items-center gap-3 bg-slate-950/60 p-3 rounded-xl border border-slate-800/80">
           <img id="bio-live-face" class="w-16 h-16 rounded-xl object-cover bg-slate-900 border border-slate-700" />
           <div>
@@ -266,7 +263,7 @@
     </div>
   </main>
 
-  <!-- In-Browser WebRTC Camera Modal -->
+  <!-- WebRTC Camera Modal -->
   <div id="camera-modal" class="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 hidden">
     <div class="bg-[#0e1628] border border-slate-700 w-full max-w-md rounded-2xl p-5 shadow-2xl space-y-4">
       <div class="flex justify-between items-center pb-2 border-b border-slate-800">
@@ -281,7 +278,6 @@
 
       <div class="relative w-full aspect-square bg-black rounded-xl overflow-hidden flex items-center justify-center border border-slate-800">
         <video id="webcam-feed" autoplay playsinline muted class="w-full h-full object-cover"></video>
-        <!-- Oval Face Positioning Guide -->
         <div class="absolute inset-0 pointer-events-none flex items-center justify-center">
           <div class="w-48 h-64 rounded-full border-2 border-dashed border-cyan-400/80"></div>
         </div>
@@ -358,7 +354,6 @@
       }
     };
 
-    // --- WebRTC Camera Modal Implementation ---
     async function openCameraModal() {
       const modal = document.getElementById('camera-modal');
       const video = document.getElementById('webcam-feed');
@@ -457,6 +452,15 @@
       activeData = res;
       document.getElementById('btn-print').disabled = false;
 
+      // Auto-populate ID number in input field if detected from card
+      const autoId = res.deterministic?.detected_id;
+      if (autoId) {
+        const idInput = document.getElementById('id-input');
+        if (!idInput.value || idInput.value !== autoId) {
+          idInput.value = autoId;
+        }
+      }
+
       const risk = res.risk || {};
       const vTag = document.getElementById('verdict-tag');
       const rScore = document.getElementById('risk-score');
@@ -495,17 +499,17 @@
       setBadge('chk-moire', !res.forensics?.moire?.is_screen_recapture, "Natural", "Screen Spoof");
       setBadge('chk-tamper', (res.forensics?.box_count || 0) === 0, "Intact", (res.forensics?.box_count || 0) + " Alteration(s)");
 
-      // 4. Cryptographic / Checksum Integrity
+      // 4. Cryptographic / Checksum Integrity (Direct QR Anchor)
       const mrzPassed = res.deterministic?.mrz?.is_mrz_detected ? res.deterministic.mrz.all_checks_passed : null;
       const isDihedralValid = res.deterministic?.dihedral_valid;
       const isQrDetected = res.deterministic?.qr?.detected;
 
       if (mrzPassed !== null) {
         setBadge('chk-mrz', mrzPassed, "Pass (ICAO)", "Checksum Fail");
-      } else if (isDihedralValid !== null && isDihedralValid !== undefined) {
-        setBadge('chk-mrz', isDihedralValid, "Pass (D5 Checksum)", "Checksum Fail");
       } else if (isQrDetected) {
         setBadge('chk-mrz', true, "Pass (QR Cryptographic)", "Invalid QR");
+      } else if (isDihedralValid !== null && isDihedralValid !== undefined) {
+        setBadge('chk-mrz', isDihedralValid, "Pass (D5 Checksum)", "Checksum Fail");
       } else {
         const el = document.getElementById('chk-mrz');
         el.className = "text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400";
