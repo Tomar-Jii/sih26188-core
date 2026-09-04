@@ -30,19 +30,19 @@ class TextureFlatnessAnalyzer:
         local_sq = cv2.blur(gray_f ** 2, (3, 3))
         local_std = np.sqrt(np.maximum(local_sq - (local_mean ** 2), 0.0))
 
-        # Real print ink has diffuse camera grain; synthetic digital pen is flat (std < 2.0)
-        is_synthetic_markup = (gray < 40) & (chroma_diff <= 3) & (local_std < 2.0)
+        # Synthetic markup is flat pitch-black with zero chromatic deviation
+        is_synthetic_markup = (gray < 35) & (chroma_diff <= 2) & (local_std < 1.8)
         markup_mask = is_synthetic_markup.astype(np.uint8) * 255
 
         # Mask ALL QR matrices
         for qx, qy, qw, qh in all_qr_boxes:
-            pad = 12
+            pad = 16
             cv2.rectangle(markup_mask, (max(0, qx - pad), max(0, qy - pad)),
                           (min(w_img, qx + qw + pad), min(h_img, qy + qh + pad)), 0, -1)
 
         # Mask Government Emblems
-        cv2.rectangle(markup_mask, (0, 0), (int(w_img * 0.20), int(h_img * 0.20)), 0, -1)
-        cv2.rectangle(markup_mask, (int(w_img * 0.75), 0), (w_img, int(h_img * 0.20)), 0, -1)
+        cv2.rectangle(markup_mask, (0, 0), (int(w_img * 0.22), int(h_img * 0.22)), 0, -1)
+        cv2.rectangle(markup_mask, (int(w_img * 0.75), 0), (w_img, int(h_img * 0.22)), 0, -1)
 
         k_clean = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
         cleaned_markup = cv2.morphologyEx(markup_mask, cv2.MORPH_OPEN, k_clean)
@@ -68,7 +68,7 @@ class TextureFlatnessAnalyzer:
         # ---------------------------------------------------------------------
         _, binary = cv2.threshold(gray, 60, 255, cv2.THRESH_BINARY_INV)
         for qx, qy, qw, qh in all_qr_boxes:
-            pad = 12
+            pad = 16
             cv2.rectangle(binary, (max(0, qx - pad), max(0, qy - pad)),
                           (min(w_img, qx + qw + pad), min(h_img, qy + qh + pad)), 0, -1)
 

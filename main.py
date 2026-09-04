@@ -46,6 +46,22 @@ def pil_to_b64(img: Image.Image) -> str:
     img.save(buf, format="PNG")
     return base64.b64encode(buf.getvalue()).decode('utf-8')
 
+def clean_for_json(data):
+    """Recursively converts numpy types, bytes, and sets into pure JSON-serializable primitives."""
+    if isinstance(data, dict):
+        return {k: clean_for_json(v) for k, v in data.items() if not isinstance(v, (np.ndarray, bytes))}
+    elif isinstance(data, list):
+        return [clean_for_json(item) for item in data if not isinstance(item, (np.ndarray, bytes))]
+    elif isinstance(data, (np.integer, np.int64, np.int32)):
+        return int(data)
+    elif isinstance(data, (np.floating, np.float64, np.float32)):
+        return float(data)
+    elif isinstance(data, (np.bool_, bool)):
+        return bool(data)
+    elif isinstance(data, (bytes, bytearray, np.ndarray)):
+        return None
+    return data
+
 @app.get("/", response_class=HTMLResponse)
 async def serve_dashboard(request: Request):
     return templates.TemplateResponse(request=request, name="index.html")
@@ -65,7 +81,7 @@ async def execute_audit(
     except Exception as exc:
         return JSONResponse(status_code=400, content={"detail": f"Stream ingestion fault: {str(exc)}"})
 
-    # Ingest Live Face (accepts both native file upload and in-browser camera blobs)
+    # Safe Live Face Ingestion
     live_cv = None
     if live_face is not None:
         try:
@@ -93,8 +109,8 @@ async def execute_audit(
             warped_cv = img_cv.copy()
         warped_pil = Image.fromarray(cv2.cvtColor(warped_cv, cv2.COLOR_BGR2RGB))
 
-        # 3. Multi-Pass Secure QR Decoder
-        qr_res = MultiPassQREngine.inspect_and_mask(warped_cv)
+        # 3. Multi-Pass Secure QR Decoder (with ZXing & Fallbacks)
+        qr_res, qr_photo_bytes = MultiPassQREngine.inspect_and_mask(warped_cv)
         all_qr_boxes = qr_res.get("bboxes", [])
         if qr_res.get("bbox") and qr_res.get("bbox") not in all_qr_boxes:
             all_qr_boxes.append(qr_res["bbox"])
@@ -102,7 +118,7 @@ async def execute_audit(
         if qr_res.get("detected"):
             trail.log(f"Cryptographic Ground-Truth: {qr_res.get('status')}", "PASS")
 
-        # 4. Deterministic Cryptographic Validators (with QR Auto-Anchor)
+        # 4. Deterministic Cryptographic Validators (Auto-Anchored)
         clean_id = id_number.replace(" ", "").strip()
         auto_uid = None
         qr_payload = qr_res.get("payload")
@@ -130,16 +146,17 @@ async def execute_audit(
 
         # 7. Biometric Avatar Match (Card Photo vs Signed QR Avatar)
         face_match_res = {"evaluated": False, "match_status": "SKIPPED", "similarity_score": 1.0, "is_photo_swap": False}
-        if qr_payload and isinstance(qr_payload, dict) and qr_payload.get("has_photo") and face_res.get("face_detected"):
-            face_match_res = BiometricFaceMatcher.compare_portraits(face_res["face_crop"], qr_payload.get("photo_bytes"))
+        if qr_photo_bytes and face_res.get("face_detected"):
+            face_match_res = BiometricFaceMatcher.compare_portraits(face_res["face_crop"], qr_photo_bytes)
             if face_match_res.get("evaluated"):
                 log_status = "PASS" if not face_match_res.get("is_photo_swap") else "FLAGGED"
                 trail.log(f"Biometric Avatar Audit: {face_match_res['match_status']} (Corr: {int(face_match_res['similarity_score']*100)}%)", log_status)
 
-        # 8. Live Selfie Face Match (Card Photo vs User Camera)
-        live_match_res = {"evaluated": False, "match_status": "SKIPPED", "similarity_score": 0.0, "is_match": True, "live_face_crop": None}
+        # 8. Live Selfie Face Match
+        live_match_res = {"evaluated": False, "match_status": "SKIPPED", "similarity_score": 0.0, "is_match": True}
+        live_crop_mat = None
         if live_cv is not None and face_res.get("face_detected"):
-            live_match_res = BiometricFaceMatcher.compare_live_face(face_res["face_crop"], live_cv)
+            live_match_res, live_crop_mat = BiometricFaceMatcher.compare_live_face(face_res["face_crop"], live_cv)
             if live_match_res.get("evaluated"):
                 log_status = "PASS" if live_match_res.get("is_match") else "FLAGGED"
                 trail.log(f"Live 1:1 Face Verification: {live_match_res['match_status']} ({int(live_match_res['similarity_score']*100)}% Similarity)", log_status)
@@ -215,9 +232,9 @@ async def execute_audit(
         )
 
         card_face_crop_b64 = mat_to_b64(face_res['face_crop']) if face_res.get("face_detected") else None
-        live_face_crop_b64 = mat_to_b64(live_match_res['live_face_crop']) if (live_match_res.get("evaluated") and live_match_res.get("live_face_crop") is not None) else None
+        live_face_crop_b64 = mat_to_b64(live_crop_mat) if live_crop_mat is not None else None
 
-        response = {
+        raw_response = {
             "version": CONFIG.APP_VERSION,
             "case_id": trail.case_id,
             "sha256": sha256,
@@ -237,11 +254,7 @@ async def execute_audit(
                     "detected": face_res.get("face_detected", False),
                     "swap_score": photo_swap_data["swap_score"],
                     "anomaly_detected": photo_swap_data["anomaly_detected"],
-                    "qr_avatar_match": {
-                        "evaluated": face_match_res.get("evaluated", False),
-                        "similarity_score": face_match_res.get("similarity_score", 1.0),
-                        "status": face_match_res.get("match_status", "SKIPPED")
-                    },
+                    "qr_avatar_match": face_match_res,
                     "live_selfie_match": live_match_res
                 },
                 "ela_variance": ela_res.get("ela_variance", 0.0),
@@ -264,8 +277,9 @@ async def execute_audit(
             }
         }
 
-        EphemeralCaseLedger.register(trail.case_id, response)
-        return response
+        sanitized_response = clean_for_json(raw_response)
+        EphemeralCaseLedger.register(trail.case_id, sanitized_response)
+        return JSONResponse(status_code=200, content=sanitized_response)
 
     except Exception as e:
         traceback.print_exc()

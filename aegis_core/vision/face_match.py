@@ -1,7 +1,5 @@
 import cv2
 import numpy as np
-from PIL import Image, ImageOps
-import io
 
 class BiometricFaceMatcher:
     """Compares card canvas portrait against cryptographically signed QR avatar and live captured selfies."""
@@ -14,7 +12,6 @@ class BiometricFaceMatcher:
 
     @classmethod
     def _compute_similarity(cls, c_face: np.ndarray, q_face: np.ndarray) -> float:
-        """Core multi-space biometric similarity algorithm (Structural + Lab Color + Sobel Cosine)."""
         c_gray = cv2.cvtColor(c_face, cv2.COLOR_BGR2GRAY)
         q_gray = cv2.cvtColor(q_face, cv2.COLOR_BGR2GRAY)
 
@@ -80,7 +77,6 @@ class BiometricFaceMatcher:
                 "match_status": match_status,
                 "similarity_score": composite_score,
                 "is_photo_swap": is_swap,
-                "qr_avatar_cv": q_face,
                 "detail": f"Biometric correlation: {composite_score * 100:.1f}% against signed QR avatar."
             }
         except Exception as e:
@@ -93,19 +89,18 @@ class BiometricFaceMatcher:
             }
 
     @classmethod
-    def compare_live_face(cls, card_face_cv: np.ndarray, live_img_cv: np.ndarray) -> dict:
+    def compare_live_face(cls, card_face_cv: np.ndarray, live_img_cv: np.ndarray) -> tuple[dict, np.ndarray]:
         default_res = {
             "evaluated": False,
             "live_face_detected": False,
             "match_status": "SKIPPED_NO_LIVE_FACE",
             "similarity_score": 0.0,
             "is_match": False,
-            "live_face_crop": None,
             "detail": "No live camera frame provided for face matching."
         }
 
         if card_face_cv is None or card_face_cv.size == 0 or live_img_cv is None or live_img_cv.size == 0:
-            return default_res
+            return default_res, None
 
         try:
             live_gray = cv2.cvtColor(live_img_cv, cv2.COLOR_BGR2GRAY) if len(live_img_cv.shape) == 3 else live_img_cv
@@ -117,15 +112,14 @@ class BiometricFaceMatcher:
                     cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
                     face_cascade = cv2.CascadeClassifier(cascade_path)
                     if not face_cascade.empty():
-                        detected = face_cascade.detectMultiScale(live_gray, scaleFactor=1.1, minNeighbors=3, minSize=(50, 50))
+                        detected = face_cascade.detectMultiScale(live_gray, scaleFactor=1.1, minNeighbors=3, minSize=(45, 45))
                         if len(detected) > 0:
                             faces = detected
                 except Exception:
                     pass
 
             if len(faces) == 0:
-                # Central crop fallback for close-up phone selfies
-                box_sz = int(min(w_l, h_l) * 0.70)
+                box_sz = int(min(w_l, h_l) * 0.75)
                 cx, cy = w_l // 2, h_l // 2
                 x1 = max(0, cx - box_sz // 2)
                 y1 = max(0, cy - box_sz // 2)
@@ -149,15 +143,15 @@ class BiometricFaceMatcher:
             is_match = sim_score >= 0.38
             match_status = "LIVE_FACE_MATCHED" if is_match else "LIVE_FACE_MISMATCH"
 
-            return {
+            result_dict = {
                 "evaluated": True,
                 "live_face_detected": True,
                 "match_status": match_status,
                 "similarity_score": sim_score,
                 "is_match": is_match,
-                "live_face_crop": l_face,
                 "detail": f"Live selfie to card match score: {sim_score * 100:.1f}% ({'PASSED' if is_match else 'FAILED'})"
             }
+            return result_dict, l_face
         except Exception as e:
             return {
                 "evaluated": False,
@@ -165,6 +159,5 @@ class BiometricFaceMatcher:
                 "match_status": "ERROR",
                 "similarity_score": 0.0,
                 "is_match": False,
-                "live_face_crop": None,
                 "detail": f"Live selfie verification error: {str(e)}"
-            }
+            }, None
